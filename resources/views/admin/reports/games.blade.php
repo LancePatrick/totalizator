@@ -74,7 +74,7 @@
         .summary-value {
             margin:10px 0 0;
             color:#0f172a;
-            font-size:30px;
+            font-size:28px;
             font-weight:950;
             letter-spacing:-.04em;
         }
@@ -167,7 +167,7 @@
 
         table {
             width:100%;
-            min-width:1100px;
+            min-width:1320px;
             border-collapse:collapse;
             text-align:left;
             font-size:14px;
@@ -217,6 +217,20 @@
 
         .income {
             color:#16a34a;
+            font-size:14px;
+            font-weight:950;
+            white-space:nowrap;
+        }
+
+        .payout {
+            color:#7c3aed;
+            font-size:14px;
+            font-weight:950;
+            white-space:nowrap;
+        }
+
+        .commission {
+            color:#ea580c;
             font-size:14px;
             font-weight:950;
             white-space:nowrap;
@@ -286,7 +300,6 @@
         @media print {
             body { background:white !important; }
             .no-print { display:none !important; }
-            .report-page { gap:12px; }
             .card, .summary-card { box-shadow:none; }
         }
 
@@ -313,9 +326,13 @@
         <section class="report-hero">
             <div class="report-hero-inner">
                 <p class="report-kicker">Admin Reports</p>
-                <h1 class="report-title">Game Earnings Report</h1>
+
+                <h1 class="report-title">
+                    Commission & Game Earnings Report
+                </h1>
+
                 <p class="report-subtitle">
-                    View total income, game history, total pools, commission earnings, and daily performance.
+                    View total pool, commission/plasada, final all bet, payouts, admin income, earnings per day, and full game history.
                 </p>
             </div>
         </section>
@@ -330,53 +347,55 @@
             <div class="summary-card">
                 <p class="summary-label">Total Pool</p>
                 <h2 class="summary-value">₱{{ number_format($totalPool ?? 0, 2) }}</h2>
-                <p class="summary-sub">All bets combined</p>
+                <p class="summary-sub">Meron + Wala + Draw</p>
             </div>
 
             <div class="summary-card">
-                <p class="summary-label">Net Pool</p>
-                <h2 class="summary-value">₱{{ number_format($netPool ?? 0, 2) }}</h2>
-                <p class="summary-sub">After commission</p>
-            </div>
-
-            <div class="summary-card">
-                <p class="summary-label">Total Income</p>
-                <h2 class="summary-value" style="color:#16a34a;">
+                <p class="summary-label">Commission / Plasada</p>
+                <h2 class="summary-value" style="color:#ea580c;">
                     ₱{{ number_format($commissionEarned ?? 0, 2) }}
                 </h2>
-                <p class="summary-sub">Commission earned</p>
+                <p class="summary-sub">Total pool × commission rate</p>
             </div>
 
             <div class="summary-card">
-                <p class="summary-label">Meron Bets</p>
-                <h2 class="summary-value" style="color:#dc2626;">
-                    ₱{{ number_format($meronTotal ?? 0, 2) }}
-                </h2>
-                <p class="summary-sub">Total Meron pool</p>
+                <p class="summary-label">Final All Bet / Net Pool</p>
+                <h2 class="summary-value">₱{{ number_format($netPool ?? 0, 2) }}</h2>
+                <p class="summary-sub">Total pool minus commission</p>
             </div>
 
             <div class="summary-card">
-                <p class="summary-label">Wala Bets</p>
-                <h2 class="summary-value" style="color:#2563eb;">
-                    ₱{{ number_format($walaTotal ?? 0, 2) }}
-                </h2>
-                <p class="summary-sub">Total Wala pool</p>
-            </div>
-
-            <div class="summary-card">
-                <p class="summary-label">Draw Bets</p>
+                <p class="summary-label">Payout Total</p>
                 <h2 class="summary-value" style="color:#7c3aed;">
-                    ₱{{ number_format($drawTotal ?? 0, 2) }}
+                    ₱{{ number_format($payoutTotal ?? 0, 2) }}
                 </h2>
-                <p class="summary-sub">Total Draw pool</p>
+                <p class="summary-sub">Total paid to winners/refunds</p>
+            </div>
+
+            <div class="summary-card">
+                <p class="summary-label">Admin Income</p>
+                <h2 class="summary-value" style="color:#16a34a;">
+                    ₱{{ number_format($adminIncome ?? $commissionEarned ?? 0, 2) }}
+                </h2>
+                <p class="summary-sub">Commission earnings</p>
             </div>
 
             <div class="summary-card">
                 <p class="summary-label">Average Income/Game</p>
                 <h2 class="summary-value">
-                    ₱{{ number_format(($totalGames ?? 0) > 0 ? ($commissionEarned ?? 0) / $totalGames : 0, 2) }}
+                    ₱{{ number_format($averageIncomePerGame ?? 0, 2) }}
                 </h2>
-                <p class="summary-sub">Commission average</p>
+                <p class="summary-sub">Admin income average</p>
+            </div>
+
+            <div class="summary-card">
+                <p class="summary-label">Bet Breakdown</p>
+                <h2 class="summary-value" style="font-size:18px;line-height:1.5;">
+                    M ₱{{ number_format($meronTotal ?? 0, 2) }}<br>
+                    W ₱{{ number_format($walaTotal ?? 0, 2) }}<br>
+                    D ₱{{ number_format($drawTotal ?? 0, 2) }}
+                </h2>
+                <p class="summary-sub">Meron / Wala / Draw pools</p>
             </div>
         </section>
 
@@ -384,7 +403,7 @@
             <div class="card-head">
                 <div>
                     <h2 class="card-title">Filters</h2>
-                    <p class="card-sub">Filter by date, game/round, status, winning side, or overall.</p>
+                    <p class="card-sub">Filter by date, game/round, status, winning side, or reset to overall.</p>
                 </div>
 
                 <div class="no-print" style="display:flex;gap:8px;flex-wrap:wrap;">
@@ -441,7 +460,7 @@
             <div class="card-head">
                 <div>
                     <h2 class="card-title">Earnings Per Day</h2>
-                    <p class="card-sub">Daily income based on current filters.</p>
+                    <p class="card-sub">Daily commission, payouts, and admin income based on current filters.</p>
                 </div>
             </div>
 
@@ -461,13 +480,23 @@
                         </div>
 
                         <div class="daily-row">
-                            <span>Net Pool</span>
+                            <span>Final All Bet</span>
                             <strong>₱{{ number_format($day['net_pool'], 2) }}</strong>
                         </div>
 
                         <div class="daily-row">
-                            <span>Income</span>
-                            <strong style="color:#16a34a;">₱{{ number_format($day['commission'], 2) }}</strong>
+                            <span>Commission</span>
+                            <strong style="color:#ea580c;">₱{{ number_format($day['commission'], 2) }}</strong>
+                        </div>
+
+                        <div class="daily-row">
+                            <span>Payout</span>
+                            <strong style="color:#7c3aed;">₱{{ number_format($day['payout_total'] ?? 0, 2) }}</strong>
+                        </div>
+
+                        <div class="daily-row">
+                            <span>Admin Income</span>
+                            <strong style="color:#16a34a;">₱{{ number_format($day['admin_income'] ?? $day['commission'], 2) }}</strong>
                         </div>
                     </div>
                 @empty
@@ -480,7 +509,7 @@
             <div class="card-head">
                 <div>
                     <h2 class="card-title">Game History</h2>
-                    <p class="card-sub">Detailed game report with total pools and income.</p>
+                    <p class="card-sub">Detailed game report with total pool, commission, final all bet, payout, and admin income.</p>
                 </div>
             </div>
 
@@ -496,8 +525,11 @@
                             <th>Wala</th>
                             <th>Draw</th>
                             <th>Total Pool</th>
-                            <th>Net Pool</th>
-                            <th>Income</th>
+                            <th>Rate</th>
+                            <th>Commission</th>
+                            <th>Final All Bet</th>
+                            <th>Payout</th>
+                            <th>Admin Income</th>
                         </tr>
                     </thead>
 
@@ -513,19 +545,14 @@
                                     default => 'pill-default',
                                 };
 
-                                $income = isset($game->commission_amount)
-                                    ? (float) $game->commission_amount
-                                    : max(0, (float) ($game->total_pool ?? 0) - (float) ($game->net_pool ?? 0));
+                                $commissionAmount = (float) ($game->commission_amount ?? max(0, ($game->total_pool ?? 0) - ($game->net_pool ?? 0)));
+                                $adminGameIncome = (float) ($game->admin_income ?? $commissionAmount);
                             @endphp
 
                             <tr>
                                 <td>
-                                    <p class="muted">
-                                        {{ $game->created_at?->format('M d, Y') }}
-                                    </p>
-                                    <p class="muted">
-                                        {{ $game->created_at?->format('h:i A') }}
-                                    </p>
+                                    <p class="muted">{{ $game->created_at?->format('M d, Y') }}</p>
+                                    <p class="muted">{{ $game->created_at?->format('h:i A') }}</p>
                                 </td>
 
                                 <td>
@@ -543,20 +570,20 @@
                                     <p class="name">{{ strtoupper($game->winning_side ?: 'N/A') }}</p>
                                 </td>
 
-                                <td>
-                                    <span class="amount">₱{{ number_format($game->meron_total ?? 0, 2) }}</span>
-                                </td>
-
-                                <td>
-                                    <span class="amount">₱{{ number_format($game->wala_total ?? 0, 2) }}</span>
-                                </td>
-
-                                <td>
-                                    <span class="amount">₱{{ number_format($game->draw_total ?? 0, 2) }}</span>
-                                </td>
+                                <td><span class="amount">₱{{ number_format($game->meron_total ?? 0, 2) }}</span></td>
+                                <td><span class="amount">₱{{ number_format($game->wala_total ?? 0, 2) }}</span></td>
+                                <td><span class="amount">₱{{ number_format($game->draw_total ?? 0, 2) }}</span></td>
 
                                 <td>
                                     <span class="amount">₱{{ number_format($game->total_pool ?? 0, 2) }}</span>
+                                </td>
+
+                                <td>
+                                    <span class="amount">{{ number_format($game->commission_rate ?? 0, 2) }}%</span>
+                                </td>
+
+                                <td>
+                                    <span class="commission">₱{{ number_format($commissionAmount, 2) }}</span>
                                 </td>
 
                                 <td>
@@ -564,12 +591,16 @@
                                 </td>
 
                                 <td>
-                                    <span class="income">₱{{ number_format($income, 2) }}</span>
+                                    <span class="payout">₱{{ number_format($game->payout_total ?? 0, 2) }}</span>
+                                </td>
+
+                                <td>
+                                    <span class="income">₱{{ number_format($adminGameIncome, 2) }}</span>
                                 </td>
                             </tr>
                         @empty
                             <tr>
-                                <td colspan="10">
+                                <td colspan="13">
                                     <div class="empty">No game reports found.</div>
                                 </td>
                             </tr>

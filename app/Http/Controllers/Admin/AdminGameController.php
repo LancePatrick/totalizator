@@ -10,13 +10,21 @@ use App\Models\User;
 use App\Models\WalletTransaction;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 class AdminGameController extends Controller
 {
     public function index()
     {
+        $currentGame = GameRound::latest()->first();
+
+        if ($currentGame) {
+            $currentGame->recalculateTotalsAndOdds();
+            $currentGame->refresh();
+        }
+
         return view('admin.games.index', [
-            'currentGame' => GameRound::latest()->first(),
+            'currentGame' => $currentGame,
             'games' => GameRound::latest()->paginate(10),
             'logrohan' => LogrohanEntry::latest()->take(30)->get(),
         ]);
@@ -55,6 +63,8 @@ class AdminGameController extends Controller
 
     public function close(GameRound $game)
     {
+        $game->recalculateTotalsAndOdds();
+
         $game->update([
             'status' => 'closed',
             'closed_at' => now(),
@@ -65,6 +75,8 @@ class AdminGameController extends Controller
 
     public function end(GameRound $game)
     {
+        $game->recalculateTotalsAndOdds();
+
         $game->update([
             'status' => 'ended',
             'ended_at' => now(),
@@ -80,148 +92,33 @@ class AdminGameController extends Controller
         ]);
 
         DB::transaction(function () use ($game, $data) {
-            $winningSide = $data['winning_side'];
-
             $game = GameRound::whereKey($game->id)
                 ->lockForUpdate()
                 ->firstOrFail();
 
             if ($game->status === 'settled') {
-                return;
+                throw new \Exception('This game is already settled.');
             }
 
-            /*
-            |--------------------------------------------------------------------------
-            | Recalculate totals and final odds before payout
-            |--------------------------------------------------------------------------
-            */
-            if (method_exists($game, 'recalculateTotalsAndOdds')) {
-                $game->recalculateTotalsAndOdds();
-                $game->refresh();
-            }
+            $game->recalculateTotalsAndOdds();
+            $game->refresh();
 
-            /*
-            |--------------------------------------------------------------------------
-            | Get final totalizator odds
-            |--------------------------------------------------------------------------
-            */
-            $finalOdds = match ($winningSide) {
-                'meron' => (float) ($game->meron_odds ?? 0),
-                'wala' => (float) ($game->wala_odds ?? 0),
-                'draw' => (float) ($game->draw_odds ?? 0),
-                default => 0,
-            };
+            $winningSide = $data['winning_side'];
 
-            /*
-            |--------------------------------------------------------------------------
-            | Safety fallback: if odds are 0, return at least original bet for winners
-            |--------------------------------------------------------------------------
-            */
-            if ($winningSide !== 'cancelled' && $finalOdds <= 0) {
-                $finalOdds = 1;
-            }
+            $totalPayout = 0;
 
-            $bets = GameBet::where('game_round_id', $game->id)
-                ->where('status', 'pending')
-                ->lockForUpdate()
-                ->get();
-
-            foreach ($bets as $bet) {
-                $player = User::whereKey($bet->user_id)
-                    ->lockForUpdate()
-                    ->first();
-
-                if (!$player) {
-                    continue;
-                }
-
-                $balanceBefore = (float) $player->wallet_balance;
-
-                /*
-                |--------------------------------------------------------------------------
-                | Cancelled: refund all pending bets
-                |--------------------------------------------------------------------------
-                */
-                if ($winningSide === 'cancelled') {
-                    $refundAmount = round((float) $bet->amount, 2);
-                    $balanceAfter = $balanceBefore + $refundAmount;
-
-                    $player->update([
-                        'wallet_balance' => $balanceAfter,
-                    ]);
-
-                    $bet->update([
-                        'status' => 'refunded',
-                        'payout_amount' => $refundAmount,
-                    ]);
-
-                    WalletTransaction::create([
-                        'user_id' => $player->id,
-                        'admin_id' => auth()->id(),
-                        'type' => 'refund',
-                        'direction' => 'credit',
-                        'amount' => $refundAmount,
-                        'balance_before' => $balanceBefore,
-                        'balance_after' => $balanceAfter,
-                        'reference_type' => GameBet::class,
-                        'reference_id' => $bet->id,
-                        'description' => 'Refund for cancelled game round #' . $game->id,
-                    ]);
-
-                    continue;
-                }
-
-                /*
-                |--------------------------------------------------------------------------
-                | Winner: payout using FINAL TOTALIZATOR ODDS
-                |--------------------------------------------------------------------------
-                */
-                if ($bet->side === $winningSide) {
-                    $payoutAmount = round((float) $bet->amount * $finalOdds, 2);
-                    $balanceAfter = $balanceBefore + $payoutAmount;
-
-                    $player->update([
-                        'wallet_balance' => $balanceAfter,
-                    ]);
-
-                    $bet->update([
-                        'status' => 'won',
-                        'odds_at_bet' => $finalOdds,
-                        'payout_amount' => $payoutAmount,
-                    ]);
-
-                    WalletTransaction::create([
-                        'user_id' => $player->id,
-                        'admin_id' => auth()->id(),
-                        'type' => 'payout',
-                        'direction' => 'credit',
-                        'amount' => $payoutAmount,
-                        'balance_before' => $balanceBefore,
-                        'balance_after' => $balanceAfter,
-                        'reference_type' => GameBet::class,
-                        'reference_id' => $bet->id,
-                        'description' => 'Winning payout for ' . strtoupper($winningSide) . ' round #' . $game->id,
-                    ]);
-
-                    continue;
-                }
-
-                /*
-                |--------------------------------------------------------------------------
-                | Loser
-                |--------------------------------------------------------------------------
-                */
-                $bet->update([
-                    'status' => 'lost',
-                    'payout_amount' => 0,
-                ]);
+            if ($winningSide === 'cancelled') {
+                $totalPayout = $this->refundAllBets($game);
+            } else {
+                $totalPayout = $this->payoutWinners($game, $winningSide);
             }
 
             $game->update([
                 'status' => 'settled',
                 'winning_side' => $winningSide,
+                'payout_total' => $totalPayout,
+                'admin_income' => $game->commission_amount,
                 'settled_at' => now(),
-                'ended_at' => $game->ended_at ?? now(),
             ]);
 
             LogrohanEntry::create([
@@ -231,6 +128,178 @@ class AdminGameController extends Controller
             ]);
         });
 
-        return back()->with('success', 'Result declared, payouts processed, and saved to logrohan.');
+        return back()->with('success', 'Result declared, payouts processed, and commission saved.');
+    }
+
+    private function payoutWinners(GameRound $game, string $winningSide): float
+    {
+        $winningOdds = $game->oddsForSide($winningSide);
+
+        $winningBets = GameBet::with('user')
+            ->where('game_round_id', $game->id)
+            ->where('side', $winningSide)
+            ->get();
+
+        $totalPayout = 0;
+
+        foreach ($winningBets as $bet) {
+            $player = User::whereKey($bet->user_id)
+                ->lockForUpdate()
+                ->first();
+
+            if (!$player) {
+                continue;
+            }
+
+            $payout = round((float) $bet->amount * $winningOdds, 2);
+
+            $before = (float) $player->wallet_balance;
+            $after = $before + $payout;
+
+            $player->update([
+                'wallet_balance' => $after,
+            ]);
+
+            $this->updateBetAsWon($bet, $payout, $winningOdds);
+
+            WalletTransaction::create([
+                'user_id' => $player->id,
+                'admin_id' => auth()->id(),
+                'type' => 'payout',
+                'direction' => 'credit',
+                'amount' => $payout,
+                'balance_before' => $before,
+                'balance_after' => $after,
+                'reference_type' => GameBet::class,
+                'reference_id' => $bet->id,
+                'description' => 'Game payout for winning side: ' . strtoupper($winningSide),
+            ]);
+
+            $totalPayout += $payout;
+        }
+
+        $losingBets = GameBet::where('game_round_id', $game->id)
+            ->where('side', '!=', $winningSide)
+            ->get();
+
+        foreach ($losingBets as $bet) {
+            $this->updateBetAsLost($bet);
+        }
+
+        return round($totalPayout, 2);
+    }
+
+    private function refundAllBets(GameRound $game): float
+    {
+        $bets = GameBet::with('user')
+            ->where('game_round_id', $game->id)
+            ->get();
+
+        $totalRefund = 0;
+
+        foreach ($bets as $bet) {
+            $player = User::whereKey($bet->user_id)
+                ->lockForUpdate()
+                ->first();
+
+            if (!$player) {
+                continue;
+            }
+
+            $refund = round((float) $bet->amount, 2);
+
+            $before = (float) $player->wallet_balance;
+            $after = $before + $refund;
+
+            $player->update([
+                'wallet_balance' => $after,
+            ]);
+
+            $this->updateBetAsRefunded($bet, $refund);
+
+            WalletTransaction::create([
+                'user_id' => $player->id,
+                'admin_id' => auth()->id(),
+                'type' => 'refund',
+                'direction' => 'credit',
+                'amount' => $refund,
+                'balance_before' => $before,
+                'balance_after' => $after,
+                'reference_type' => GameBet::class,
+                'reference_id' => $bet->id,
+                'description' => 'Game cancelled. Bet refunded.',
+            ]);
+
+            $totalRefund += $refund;
+        }
+
+        return round($totalRefund, 2);
+    }
+
+    private function updateBetAsWon(GameBet $bet, float $payout, float $odds): void
+    {
+        $data = [];
+
+        if (Schema::hasColumn('game_bets', 'status')) {
+            $data['status'] = 'won';
+        }
+
+        if (Schema::hasColumn('game_bets', 'result')) {
+            $data['result'] = 'won';
+        }
+
+        if (Schema::hasColumn('game_bets', 'odds')) {
+            $data['odds'] = $odds;
+        }
+
+        if (Schema::hasColumn('game_bets', 'payout_amount')) {
+            $data['payout_amount'] = $payout;
+        }
+
+        if (!empty($data)) {
+            $bet->update($data);
+        }
+    }
+
+    private function updateBetAsLost(GameBet $bet): void
+    {
+        $data = [];
+
+        if (Schema::hasColumn('game_bets', 'status')) {
+            $data['status'] = 'lost';
+        }
+
+        if (Schema::hasColumn('game_bets', 'result')) {
+            $data['result'] = 'lost';
+        }
+
+        if (Schema::hasColumn('game_bets', 'payout_amount')) {
+            $data['payout_amount'] = 0;
+        }
+
+        if (!empty($data)) {
+            $bet->update($data);
+        }
+    }
+
+    private function updateBetAsRefunded(GameBet $bet, float $refund): void
+    {
+        $data = [];
+
+        if (Schema::hasColumn('game_bets', 'status')) {
+            $data['status'] = 'refunded';
+        }
+
+        if (Schema::hasColumn('game_bets', 'result')) {
+            $data['result'] = 'refunded';
+        }
+
+        if (Schema::hasColumn('game_bets', 'payout_amount')) {
+            $data['payout_amount'] = $refund;
+        }
+
+        if (!empty($data)) {
+            $bet->update($data);
+        }
     }
 }

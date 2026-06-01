@@ -6,7 +6,6 @@ use App\Http\Controllers\Controller;
 use App\Models\GameRound;
 use App\Models\WalletTransaction;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Schema;
 
 class AdminReportController extends Controller
 {
@@ -22,33 +21,41 @@ class AdminReportController extends Controller
         $summaryGames = (clone $gamesQuery)->get();
 
         $totalGames = $summaryGames->count();
+
         $totalPool = $summaryGames->sum(fn ($game) => (float) ($game->total_pool ?? 0));
         $netPool = $summaryGames->sum(fn ($game) => (float) ($game->net_pool ?? 0));
 
         $commissionEarned = $summaryGames->sum(function ($game) {
-            if (isset($game->commission_amount)) {
-                return (float) $game->commission_amount;
-            }
-
-            return max(0, (float) ($game->total_pool ?? 0) - (float) ($game->net_pool ?? 0));
+            return $this->commissionAmount($game);
         });
+
+        $adminIncome = $summaryGames->sum(function ($game) {
+            return (float) ($game->admin_income ?? $this->commissionAmount($game));
+        });
+
+        $payoutTotal = $summaryGames->sum(fn ($game) => (float) ($game->payout_total ?? 0));
 
         $meronTotal = $summaryGames->sum(fn ($game) => (float) ($game->meron_total ?? 0));
         $walaTotal = $summaryGames->sum(fn ($game) => (float) ($game->wala_total ?? 0));
         $drawTotal = $summaryGames->sum(fn ($game) => (float) ($game->draw_total ?? 0));
+
+        $averageIncomePerGame = $totalGames > 0
+            ? round($adminIncome / $totalGames, 2)
+            : 0;
 
         $dailyEarnings = $summaryGames
             ->groupBy(fn ($game) => optional($game->created_at)->format('Y-m-d') ?? 'No Date')
             ->map(function ($items, $date) {
                 $totalPool = $items->sum(fn ($game) => (float) ($game->total_pool ?? 0));
                 $netPool = $items->sum(fn ($game) => (float) ($game->net_pool ?? 0));
+                $payoutTotal = $items->sum(fn ($game) => (float) ($game->payout_total ?? 0));
 
                 $commission = $items->sum(function ($game) {
-                    if (isset($game->commission_amount)) {
-                        return (float) $game->commission_amount;
-                    }
+                    return $this->commissionAmount($game);
+                });
 
-                    return max(0, (float) ($game->total_pool ?? 0) - (float) ($game->net_pool ?? 0));
+                $adminIncome = $items->sum(function ($game) {
+                    return (float) ($game->admin_income ?? $this->commissionAmount($game));
                 });
 
                 return [
@@ -57,6 +64,8 @@ class AdminReportController extends Controller
                     'total_pool' => $totalPool,
                     'net_pool' => $netPool,
                     'commission' => $commission,
+                    'payout_total' => $payoutTotal,
+                    'admin_income' => $adminIncome,
                 ];
             })
             ->sortByDesc('date')
@@ -64,13 +73,20 @@ class AdminReportController extends Controller
 
         return view('admin.reports.games', [
             'games' => $games,
+
             'totalGames' => $totalGames,
             'totalPool' => $totalPool,
             'netPool' => $netPool,
+
             'commissionEarned' => $commissionEarned,
+            'adminIncome' => $adminIncome,
+            'payoutTotal' => $payoutTotal,
+            'averageIncomePerGame' => $averageIncomePerGame,
+
             'meronTotal' => $meronTotal,
             'walaTotal' => $walaTotal,
             'drawTotal' => $drawTotal,
+
             'dailyEarnings' => $dailyEarnings,
         ]);
     }
@@ -96,14 +112,16 @@ class AdminReportController extends Controller
                 'Wala Total',
                 'Draw Total',
                 'Total Pool',
-                'Commission Earned',
-                'Net Pool',
+                'Commission Rate',
+                'Commission / Plasada',
+                'Net Pool / Final All Bet',
+                'Payout Total',
+                'Admin Income',
             ]);
 
             foreach ($games as $game) {
-                $commission = isset($game->commission_amount)
-                    ? (float) $game->commission_amount
-                    : max(0, (float) ($game->total_pool ?? 0) - (float) ($game->net_pool ?? 0));
+                $commissionAmount = $this->commissionAmount($game);
+                $adminIncome = (float) ($game->admin_income ?? $commissionAmount);
 
                 fputcsv($handle, [
                     optional($game->created_at)->format('Y-m-d H:i:s'),
@@ -115,8 +133,11 @@ class AdminReportController extends Controller
                     $game->wala_total,
                     $game->draw_total,
                     $game->total_pool,
-                    $commission,
+                    $game->commission_rate,
+                    $commissionAmount,
                     $game->net_pool,
+                    $game->payout_total,
+                    $adminIncome,
                 ]);
             }
 
@@ -196,8 +217,11 @@ class AdminReportController extends Controller
 
                 $query->where(function ($q) use ($search) {
                     $q->where('round_name', 'like', "%{$search}%")
-                        ->orWhere('round_number', 'like', "%{$search}%")
-                        ->orWhere('id', $search);
+                        ->orWhere('round_number', 'like', "%{$search}%");
+
+                    if (is_numeric($search)) {
+                        $q->orWhere('id', (int) $search);
+                    }
                 });
             })
             ->when($request->filled('status'), function ($query) use ($request) {
@@ -229,5 +253,27 @@ class AdminReportController extends Controller
             ->when($request->filled('date_to'), function ($query) use ($request) {
                 $query->whereDate('created_at', '<=', $request->date_to);
             });
+    }
+
+    private function commissionAmount(GameRound $game): float
+    {
+        if (!is_null($game->commission_amount)) {
+            return (float) $game->commission_amount;
+        }
+
+        $totalPool = (float) ($game->total_pool ?? 0);
+        $netPool = (float) ($game->net_pool ?? 0);
+
+        if ($totalPool > 0 && $netPool > 0) {
+            return max(0, round($totalPool - $netPool, 2));
+        }
+
+        $rate = (float) ($game->commission_rate ?? 0);
+
+        if ($rate > 1) {
+            $rate = $rate / 100;
+        }
+
+        return round($totalPool * $rate, 2);
     }
 }

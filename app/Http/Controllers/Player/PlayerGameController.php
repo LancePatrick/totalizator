@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Player;
 
 use App\Http\Controllers\Controller;
+use App\Models\CommissionTransaction;
 use App\Models\GameBet;
 use App\Models\GameRound;
 use App\Models\LogrohanEntry;
@@ -107,6 +108,53 @@ class PlayerGameController extends Controller
                 'reference_id' => $bet->id,
                 'description' => 'Bet placed on ' . strtoupper($data['side']),
             ]);
+
+            /*
+            |--------------------------------------------------------------------------
+            | Agent Commission Logic
+            |--------------------------------------------------------------------------
+            | Kapag player may assigned agent, automatic kikita agent ng 2%
+            | commission based sa bet amount.
+            |
+            | Example:
+            | Player bet: ₱1,000
+            | Agent commission: ₱20
+            |
+            | This goes to commission_balance, not wallet_balance.
+            */
+
+            if ($player->role === 'player' && $player->agent_id) {
+                $agent = User::where('id', $player->agent_id)
+                    ->where('role', 'agent')
+                    ->lockForUpdate()
+                    ->first();
+
+                if ($agent) {
+                    $commissionRate = 0.02;
+                    $commissionAmount = round($amount * $commissionRate, 2);
+
+                    if ($commissionAmount > 0) {
+                        $commissionBefore = (float) $agent->commission_balance;
+                        $commissionAfter = $commissionBefore + $commissionAmount;
+
+                        $agent->update([
+                            'commission_balance' => $commissionAfter,
+                        ]);
+
+                        CommissionTransaction::create([
+                            'agent_id' => $agent->id,
+                            'type' => 'player_bet_commission',
+                            'direction' => 'credit',
+                            'amount' => $commissionAmount,
+                            'balance_before' => $commissionBefore,
+                            'balance_after' => $commissionAfter,
+                            'reference_type' => GameBet::class,
+                            'reference_id' => $bet->id,
+                            'description' => '2% commission earned from player bet: ' . $player->name,
+                        ]);
+                    }
+                }
+            }
 
             $game->recalculateTotalsAndOdds();
 

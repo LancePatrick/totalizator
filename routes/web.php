@@ -11,10 +11,15 @@ use App\Http\Controllers\Admin\AdminAgentController;
 use App\Http\Controllers\Admin\AdminPlayerController;
 use App\Http\Controllers\Admin\AdminMoneyRequestController;
 use App\Http\Controllers\Admin\AdminReportController;
+use App\Http\Controllers\Admin\AdminMonitoringController;
+use App\Http\Controllers\Admin\AdminCommissionWithdrawalController;
+use App\Http\Controllers\Admin\AdminCommissionReportController;
 
 use App\Http\Controllers\Agent\AgentDashboardController;
 use App\Http\Controllers\Agent\AgentRequestController;
 use App\Http\Controllers\Agent\AgentWalletController;
+use App\Http\Controllers\Agent\AgentCommissionController;
+use App\Http\Controllers\Agent\AgentPlayerController;
 
 use App\Http\Controllers\Player\PlayerDashboardController;
 use App\Http\Controllers\Player\PlayerGameController;
@@ -123,6 +128,30 @@ Route::middleware(['auth'])->group(function () {
 
         /*
         |--------------------------------------------------------------------------
+        | Admin Commission Withdrawals
+        |--------------------------------------------------------------------------
+        */
+
+        Route::get('/commission-withdrawals', [AdminCommissionWithdrawalController::class, 'index'])
+            ->name('commission-withdrawals.index');
+
+        Route::post('/commission-withdrawals/{commissionWithdrawal}/approve', [AdminCommissionWithdrawalController::class, 'approve'])
+            ->name('commission-withdrawals.approve');
+
+        Route::post('/commission-withdrawals/{commissionWithdrawal}/reject', [AdminCommissionWithdrawalController::class, 'reject'])
+            ->name('commission-withdrawals.reject');
+
+        /*
+        |--------------------------------------------------------------------------
+        | Admin Commission Reports
+        |--------------------------------------------------------------------------
+        */
+
+        Route::get('/commission-reports', [AdminCommissionReportController::class, 'index'])
+            ->name('commission-reports.index');
+
+        /*
+        |--------------------------------------------------------------------------
         | Admin Reports
         |--------------------------------------------------------------------------
         */
@@ -138,6 +167,27 @@ Route::middleware(['auth'])->group(function () {
 
         Route::get('/reports/wallet/export', [AdminReportController::class, 'exportWallet'])
             ->name('reports.wallet.export');
+
+        /*
+        |--------------------------------------------------------------------------
+        | Admin Monitoring / New Reports
+        |--------------------------------------------------------------------------
+        */
+
+        Route::get('/monitoring', [AdminMonitoringController::class, 'overview'])
+            ->name('monitoring.overview');
+
+        Route::get('/activity-logs', [AdminMonitoringController::class, 'activityLogs'])
+            ->name('activity-logs.index');
+
+        Route::get('/agent-hierarchy', [AdminMonitoringController::class, 'agentHierarchy'])
+            ->name('agent-hierarchy.index');
+
+        Route::get('/agent-reports', [AdminMonitoringController::class, 'agentReports'])
+            ->name('agent-reports.index');
+
+        Route::get('/agent-reports/export', [AdminMonitoringController::class, 'exportAgentReports'])
+            ->name('agent-reports.export');
     });
 
     /*
@@ -150,6 +200,12 @@ Route::middleware(['auth'])->group(function () {
         Route::get('/dashboard', [AgentDashboardController::class, 'index'])
             ->name('dashboard');
 
+        /*
+        |--------------------------------------------------------------------------
+        | Agent Wallet
+        |--------------------------------------------------------------------------
+        */
+
         Route::get('/wallet', [AgentWalletController::class, 'index'])
             ->name('wallet.index');
 
@@ -158,6 +214,12 @@ Route::middleware(['auth'])->group(function () {
 
         Route::post('/wallet/withdraw', [AgentWalletController::class, 'withdraw'])
             ->name('wallet.withdraw');
+
+        /*
+        |--------------------------------------------------------------------------
+        | Agent Player Requests
+        |--------------------------------------------------------------------------
+        */
 
         Route::get('/requests', [AgentRequestController::class, 'index'])
             ->name('requests.index');
@@ -173,6 +235,30 @@ Route::middleware(['auth'])->group(function () {
 
         Route::post('/requests/withdrawals/{withdrawal}/reject', [AgentRequestController::class, 'rejectWithdrawal'])
             ->name('requests.withdrawals.reject');
+
+        /*
+        |--------------------------------------------------------------------------
+        | Agent Commissions
+        |--------------------------------------------------------------------------
+        */
+
+        Route::get('/commissions', [AgentCommissionController::class, 'index'])
+            ->name('commissions.index');
+
+        Route::post('/commissions/convert-to-load', [AgentCommissionController::class, 'convertToLoad'])
+            ->name('commissions.convert-to-load');
+
+        Route::post('/commissions/withdraw-cash', [AgentCommissionController::class, 'withdrawCash'])
+            ->name('commissions.withdraw-cash');
+
+        /*
+        |--------------------------------------------------------------------------
+        | Agent Players
+        |--------------------------------------------------------------------------
+        */
+
+        Route::get('/players', [AgentPlayerController::class, 'index'])
+            ->name('players.index');
     });
 
     /*

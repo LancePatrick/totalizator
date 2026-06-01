@@ -152,7 +152,7 @@
 
         .ar-table {
             width: 100%;
-            min-width: 860px;
+            min-width: 900px;
             border-collapse: collapse;
             text-align: left;
             font-size: 14px;
@@ -373,24 +373,30 @@
                                     if (!in_array($moneyStatus, ['pending', 'approved', 'rejected', 'disapproved'])) {
                                         $moneyStatus = 'default';
                                     }
+
+                                    $moneyPlayer = $requestMoney->user ?? $requestMoney->player ?? null;
                                 @endphp
 
                                 <tr>
                                     <td>
                                         <p class="ar-player">
-                                            {{ $requestMoney->player->name }}
+                                            {{ $moneyPlayer?->name ?? 'Unknown Player' }}
+                                        </p>
+
+                                        <p class="ar-muted">
+                                            {{ $moneyPlayer?->email ?? 'No email' }}
                                         </p>
                                     </td>
 
                                     <td>
                                         <p class="ar-amount">
-                                            ₱{{ number_format($requestMoney->amount, 2) }}
+                                            ₱{{ number_format($requestMoney->amount ?? 0, 2) }}
                                         </p>
                                     </td>
 
                                     <td>
                                         <span class="ar-status {{ $moneyStatus }}">
-                                            {{ $requestMoney->status }}
+                                            {{ strtoupper($requestMoney->status ?? 'N/A') }}
                                         </span>
                                     </td>
 
@@ -406,7 +412,7 @@
                                                 <form method="POST" action="{{ route('agent.requests.money.approve', $requestMoney) }}">
                                                     @csrf
 
-                                                    <button class="ar-btn ar-btn-approve">
+                                                    <button type="submit" class="ar-btn ar-btn-approve">
                                                         Approve
                                                     </button>
                                                 </form>
@@ -414,7 +420,7 @@
                                                 <form method="POST" action="{{ route('agent.requests.money.reject', $requestMoney) }}">
                                                     @csrf
 
-                                                    <button class="ar-btn ar-btn-reject">
+                                                    <button type="submit" class="ar-btn ar-btn-reject">
                                                         Reject
                                                     </button>
                                                 </form>
@@ -474,52 +480,62 @@
                                     if (!in_array($withdrawalStatus, ['pending', 'approved', 'rejected', 'disapproved'])) {
                                         $withdrawalStatus = 'default';
                                     }
+
+                                    $withdrawalPlayer = $withdrawal->user ?? $withdrawal->player ?? null;
                                 @endphp
 
                                 <tr>
                                     <td>
                                         <p class="ar-player">
-                                            {{ $withdrawal->player->name }}
+                                            {{ $withdrawalPlayer?->name ?? 'Unknown Player' }}
+                                        </p>
+
+                                        <p class="ar-muted">
+                                            {{ $withdrawalPlayer?->email ?? 'No email' }}
                                         </p>
                                     </td>
 
                                     <td>
                                         <p class="ar-amount">
-                                            ₱{{ number_format($withdrawal->amount, 2) }}
+                                            ₱{{ number_format($withdrawal->amount ?? 0, 2) }}
                                         </p>
                                     </td>
 
                                     <td>
                                         <p class="ar-payment">
-                                            {{ $withdrawal->payment_method }}
+                                            {{ $withdrawal->payment_method ?: 'N/A' }}
                                         </p>
 
                                         <p class="ar-muted">
-                                            {{ $withdrawal->account_number }}
+                                            Account Name: {{ $withdrawal->account_name ?: 'N/A' }}
+                                        </p>
+
+                                        <p class="ar-muted">
+                                            Account No: {{ $withdrawal->account_number ?: 'N/A' }}
                                         </p>
                                     </td>
 
                                     <td>
                                         <span class="ar-status {{ $withdrawalStatus }}">
-                                            {{ $withdrawal->status }}
+                                            {{ strtoupper($withdrawal->status ?? 'N/A') }}
                                         </span>
                                     </td>
 
                                     <td>
                                         @if($withdrawal->status === 'pending')
                                             <div class="ar-actions">
-                                                <form method="POST" action="{{ route('agent.requests.money.approve', $requestMoney) }}">
-    @csrf
+                                                <form method="POST" action="{{ route('agent.requests.withdrawals.approve', $withdrawal) }}">
+                                                    @csrf
 
-    <button class="ar-btn ar-btn-approve">
-        Approve
-    </button>
-</form>
+                                                    <button type="submit" class="ar-btn ar-btn-approve">
+                                                        Approve
+                                                    </button>
+                                                </form>
 
                                                 <form method="POST" action="{{ route('agent.requests.withdrawals.reject', $withdrawal) }}">
                                                     @csrf
 
-                                                    <button class="ar-btn ar-btn-reject">
+                                                    <button type="submit" class="ar-btn ar-btn-reject">
                                                         Reject
                                                     </button>
                                                 </form>

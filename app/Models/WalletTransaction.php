@@ -27,11 +27,43 @@ class WalletTransaction extends Model
 
     public function user()
     {
-        return $this->belongsTo(User::class);
+        return $this->belongsTo(User::class, 'user_id');
     }
 
     public function admin()
     {
         return $this->belongsTo(User::class, 'admin_id');
+    }
+
+    public function reference()
+    {
+        return $this->morphTo(null, 'reference_type', 'reference_id');
+    }
+
+    public function isCredit(): bool
+    {
+        return $this->direction === 'credit';
+    }
+
+    public function isDebit(): bool
+    {
+        return $this->direction === 'debit';
+    }
+
+    public function getFormattedTypeAttribute(): string
+    {
+        return strtoupper(str_replace('_', ' ', $this->type ?? ''));
+    }
+
+    public function getFormattedDirectionAttribute(): string
+    {
+        return strtoupper($this->direction ?? '');
+    }
+
+    public function getSignedAmountAttribute(): string
+    {
+        $sign = $this->direction === 'credit' ? '+' : '-';
+
+        return $sign . ' ₱' . number_format((float) $this->amount, 2);
     }
 }

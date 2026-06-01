@@ -12,17 +12,24 @@ class GameRound extends Model
         'round_number',
         'video_url',
         'status',
+        'winning_side',
+
+        'commission_rate',
+        'commission_amount',
+        'admin_income',
+
         'meron_total',
         'wala_total',
         'draw_total',
         'total_pool',
-        'commission_rate',
-        'commission_amount',
         'net_pool',
+
         'meron_odds',
         'wala_odds',
         'draw_odds',
-        'winning_side',
+
+        'payout_total',
+
         'started_at',
         'closed_at',
         'ended_at',
@@ -30,65 +37,97 @@ class GameRound extends Model
     ];
 
     protected $casts = [
+        'commission_rate' => 'decimal:4',
+        'commission_amount' => 'decimal:2',
+        'admin_income' => 'decimal:2',
+
         'meron_total' => 'decimal:2',
         'wala_total' => 'decimal:2',
         'draw_total' => 'decimal:2',
         'total_pool' => 'decimal:2',
-        'commission_rate' => 'decimal:2',
-        'commission_amount' => 'decimal:2',
         'net_pool' => 'decimal:2',
-        'meron_odds' => 'decimal:2',
-        'wala_odds' => 'decimal:2',
-        'draw_odds' => 'decimal:2',
+
+        'meron_odds' => 'decimal:4',
+        'wala_odds' => 'decimal:4',
+        'draw_odds' => 'decimal:4',
+
+        'payout_total' => 'decimal:2',
+
         'started_at' => 'datetime',
         'closed_at' => 'datetime',
         'ended_at' => 'datetime',
         'settled_at' => 'datetime',
     ];
 
-    public function creator()
-    {
-        return $this->belongsTo(User::class, 'created_by');
-    }
-
     public function bets()
     {
         return $this->hasMany(GameBet::class);
     }
 
-    public function logrohanEntry()
+    public function creator()
     {
-        return $this->hasOne(LogrohanEntry::class);
+        return $this->belongsTo(User::class, 'created_by');
     }
 
-    public function isOpen(): bool
+    public function normalizeCommissionRate(): float
     {
-        return $this->status === 'open';
+        $rate = (float) ($this->commission_rate ?? 5);
+
+        return $rate > 1 ? $rate / 100 : $rate;
     }
 
     public function recalculateTotalsAndOdds(): void
     {
-        $this->meron_total = $this->bets()->where('side', 'meron')->sum('amount');
-        $this->wala_total = $this->bets()->where('side', 'wala')->sum('amount');
-        $this->draw_total = $this->bets()->where('side', 'draw')->sum('amount');
+        $meronTotal = (float) $this->bets()
+            ->where('side', 'meron')
+            ->sum('amount');
 
-        $this->total_pool = $this->meron_total + $this->wala_total + $this->draw_total;
+        $walaTotal = (float) $this->bets()
+            ->where('side', 'wala')
+            ->sum('amount');
 
-        $this->commission_amount = $this->total_pool * ($this->commission_rate / 100);
-        $this->net_pool = $this->total_pool - $this->commission_amount;
+        $drawTotal = (float) $this->bets()
+            ->where('side', 'draw')
+            ->sum('amount');
 
-        $this->meron_odds = $this->meron_total > 0
-            ? $this->net_pool / $this->meron_total
-            : 0;
+        $totalPool = $meronTotal + $walaTotal + $drawTotal;
 
-        $this->wala_odds = $this->wala_total > 0
-            ? $this->net_pool / $this->wala_total
-            : 0;
+        $commissionRate = $this->normalizeCommissionRate();
 
-        $this->draw_odds = $this->draw_total > 0
-            ? $this->net_pool / $this->draw_total
-            : 0;
+        $commissionAmount = round($totalPool * $commissionRate, 2);
 
-        $this->save();
+        $netPool = round($totalPool - $commissionAmount, 2);
+
+        $meronOdds = $meronTotal > 0 ? round($netPool / $meronTotal, 4) : 0;
+        $walaOdds = $walaTotal > 0 ? round($netPool / $walaTotal, 4) : 0;
+        $drawOdds = $drawTotal > 0 ? round($netPool / $drawTotal, 4) : 0;
+
+        $this->update([
+            'meron_total' => $meronTotal,
+            'wala_total' => $walaTotal,
+            'draw_total' => $drawTotal,
+            'total_pool' => $totalPool,
+            'commission_amount' => $commissionAmount,
+            'admin_income' => $commissionAmount,
+            'net_pool' => $netPool,
+            'meron_odds' => $meronOdds,
+            'wala_odds' => $walaOdds,
+            'draw_odds' => $drawOdds,
+        ]);
+    }
+
+    public function oddsForSide(string $side): float
+    {
+        return match ($side) {
+            'meron' => (float) $this->meron_odds,
+            'wala' => (float) $this->wala_odds,
+            'draw' => (float) $this->draw_odds,
+            default => 0,
+        };
+    }
+
+    public function perHundredPrizeForSide(string $side): float
+    {
+        return round($this->oddsForSide($side) * 100, 2);
     }
 }

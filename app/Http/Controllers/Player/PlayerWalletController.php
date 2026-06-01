@@ -4,20 +4,25 @@ namespace App\Http\Controllers\Player;
 
 use App\Http\Controllers\Controller;
 use App\Models\MoneyRequest;
+use App\Models\User;
+use App\Models\WalletTransaction;
 use App\Models\WithdrawalRequest;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class PlayerWalletController extends Controller
 {
     public function index()
     {
+        $player = auth()->user();
+
         return view('player.wallet.index', [
-            'moneyRequests' => MoneyRequest::where('user_id', auth()->id())
+            'moneyRequests' => MoneyRequest::where('user_id', $player->id)
                 ->latest()
                 ->take(30)
                 ->get(),
 
-            'withdrawals' => WithdrawalRequest::where('user_id', auth()->id())
+            'withdrawals' => WithdrawalRequest::where('user_id', $player->id)
                 ->latest()
                 ->take(30)
                 ->get(),
@@ -35,12 +40,6 @@ class PlayerWalletController extends Controller
         ]);
 
         $player = auth()->user();
-
-        if (!$player->agent_id) {
-            return back()->withErrors([
-                'agent' => 'You do not have an assigned agent yet.',
-            ]);
-        }
 
         $proofPath = null;
 
@@ -74,32 +73,65 @@ class PlayerWalletController extends Controller
             'notes' => ['nullable', 'string', 'max:1000'],
         ]);
 
-        $player = auth()->user();
+        try {
+            DB::transaction(function () use ($data) {
+                $player = User::where('id', auth()->id())
+                    ->lockForUpdate()
+                    ->firstOrFail();
 
-        if (!$player->agent_id) {
+                if ($player->role !== 'player') {
+                    throw new \RuntimeException('Only players can request withdrawal here.');
+                }
+
+                if (!$player->agent_id) {
+                    throw new \RuntimeException('You do not have an assigned agent.');
+                }
+
+                $amount = (float) $data['amount'];
+
+                if ($amount > (float) $player->wallet_balance) {
+                    throw new \RuntimeException('You can only withdraw up to your current wallet balance.');
+                }
+
+                $playerBefore = (float) $player->wallet_balance;
+                $playerAfter = $playerBefore - $amount;
+
+                $player->update([
+                    'wallet_balance' => $playerAfter,
+                ]);
+
+                $withdrawal = WithdrawalRequest::create([
+                    'user_id' => $player->id,
+                    'player_id' => $player->id,
+                    'agent_id' => $player->agent_id,
+                    'admin_id' => null,
+                    'amount' => $amount,
+                    'payment_method' => $data['payment_method'],
+                    'account_name' => $data['account_name'],
+                    'account_number' => $data['account_number'],
+                    'notes' => $data['notes'] ?? null,
+                    'status' => 'pending',
+                ]);
+
+                WalletTransaction::create([
+                    'user_id' => $player->id,
+                    'admin_id' => null,
+                    'type' => 'player_withdrawal_request',
+                    'direction' => 'debit',
+                    'amount' => $amount,
+                    'balance_before' => $playerBefore,
+                    'balance_after' => $playerAfter,
+                    'reference_type' => WithdrawalRequest::class,
+                    'reference_id' => $withdrawal->id,
+                    'description' => 'Player withdrawal request submitted. Amount deducted while waiting for agent approval.',
+                ]);
+            });
+
+            return back()->with('success', 'Withdrawal request submitted. Amount deducted while waiting for agent approval.');
+        } catch (\Throwable $e) {
             return back()->withErrors([
-                'agent' => 'You do not have an assigned agent yet.',
+                'amount' => $e->getMessage(),
             ]);
         }
-
-        if ((float) $player->wallet_balance < (float) $data['amount']) {
-            return back()->withErrors([
-                'amount' => 'Insufficient wallet balance.',
-            ]);
-        }
-
-        WithdrawalRequest::create([
-            'user_id' => $player->id,
-            'agent_id' => $player->agent_id,
-            'admin_id' => null,
-            'amount' => $data['amount'],
-            'payment_method' => $data['payment_method'],
-            'account_name' => $data['account_name'],
-            'account_number' => $data['account_number'],
-            'notes' => $data['notes'] ?? null,
-            'status' => 'pending',
-        ]);
-
-        return back()->with('success', 'Withdrawal request submitted to your agent.');
     }
 }

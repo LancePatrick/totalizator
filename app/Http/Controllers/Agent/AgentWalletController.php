@@ -34,6 +34,8 @@ class AgentWalletController extends Controller
             'notes' => ['nullable', 'string', 'max:1000'],
         ]);
 
+        $agent = auth()->user();
+
         $proofPath = null;
 
         if ($request->hasFile('proof_image')) {
@@ -42,8 +44,8 @@ class AgentWalletController extends Controller
         }
 
         MoneyRequest::create([
-            'user_id' => auth()->id(),
-            'agent_id' => null,
+            'user_id' => $agent->id,
+            'agent_id' => $agent->id,
             'admin_id' => null,
             'amount' => $data['amount'],
             'payment_method' => $data['payment_method'] ?? null,
@@ -76,7 +78,8 @@ class AgentWalletController extends Controller
 
         WithdrawalRequest::create([
             'user_id' => $agent->id,
-            'agent_id' => null,
+            'player_id' => null,
+            'agent_id' => $agent->id,
             'admin_id' => null,
             'amount' => $data['amount'],
             'payment_method' => $data['payment_method'],

@@ -2,41 +2,38 @@
 
 namespace App\Models;
 
-// use Illuminate\Contracts\Auth\MustVerifyEmail;
-
-use Database\Factories\UserFactory;
-use Illuminate\Database\Eloquent\Attributes\Fillable;
-use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Support\Str;
 use Laravel\Fortify\TwoFactorAuthenticatable;
 
-#[Fillable([
-    'name',
-    'email',
-    'password',
-    'role',
-    'agent_id',
-    'agent_code',
-    'wallet_balance',
-    'is_active',
-    'kyc_status',
-    'phone',
-    'location',
-    'last_login_at',
-])]
-#[Hidden([
-    'password',
-    'two_factor_secret',
-    'two_factor_recovery_codes',
-    'remember_token',
-])]
 class User extends Authenticatable
 {
-    /** @use HasFactory<UserFactory> */
     use HasFactory, Notifiable, TwoFactorAuthenticatable;
+
+    protected $fillable = [
+        'name',
+        'email',
+        'password',
+        'role',
+        'agent_id',
+        'agent_code',
+        'wallet_balance',
+        'commission_balance',
+        'is_active',
+        'kyc_status',
+        'phone',
+        'location',
+        'last_login_at',
+    ];
+
+    protected $hidden = [
+        'password',
+        'two_factor_secret',
+        'two_factor_recovery_codes',
+        'remember_token',
+    ];
 
     protected function casts(): array
     {
@@ -44,6 +41,7 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'wallet_balance' => 'decimal:2',
+            'commission_balance' => 'decimal:2',
             'is_active' => 'boolean',
             'last_login_at' => 'datetime',
         ];
@@ -141,7 +139,7 @@ class User extends Authenticatable
 
     public function walletTransactions()
     {
-        return $this->hasMany(WalletTransaction::class);
+        return $this->hasMany(WalletTransaction::class, 'user_id');
     }
 
     public function moneyRequests()
@@ -166,18 +164,34 @@ class User extends Authenticatable
 
     /*
     |--------------------------------------------------------------------------
+    | Commission Relationships
+    |--------------------------------------------------------------------------
+    */
+
+    public function commissionTransactions()
+    {
+        return $this->hasMany(CommissionTransaction::class, 'agent_id');
+    }
+
+    public function commissionWithdrawals()
+    {
+        return $this->hasMany(CommissionWithdrawalRequest::class, 'agent_id');
+    }
+
+    /*
+    |--------------------------------------------------------------------------
     | KYC Relationships
     |--------------------------------------------------------------------------
     */
 
     public function kycSubmissions()
     {
-        return $this->hasMany(KycSubmission::class);
+        return $this->hasMany(KycSubmission::class, 'user_id');
     }
 
     public function latestKycSubmission()
     {
-        return $this->hasOne(KycSubmission::class)->latestOfMany();
+        return $this->hasOne(KycSubmission::class, 'user_id')->latestOfMany();
     }
 
     /*
@@ -188,12 +202,44 @@ class User extends Authenticatable
 
     public function gameBets()
     {
-        return $this->hasMany(GameBet::class);
+        return $this->hasMany(GameBet::class, 'user_id');
     }
 
     public function createdGameRounds()
     {
         return $this->hasMany(GameRound::class, 'created_by');
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Agent Registration Link
+    |--------------------------------------------------------------------------
+    */
+
+    public function getRegistrationLinkAttribute(): ?string
+    {
+        if (!$this->agent_code) {
+            return null;
+        }
+
+        return url('/register?agent=' . $this->agent_code);
+    }
+
+    public function ensureAgentCode(): string
+    {
+        if ($this->agent_code) {
+            return $this->agent_code;
+        }
+
+        do {
+            $code = 'AGT-' . Str::upper(Str::random(8));
+        } while (self::where('agent_code', $code)->exists());
+
+        $this->forceFill([
+            'agent_code' => $code,
+        ])->save();
+
+        return $code;
     }
 
     /*
@@ -238,10 +284,21 @@ class User extends Authenticatable
 
     public function initials(): string
     {
-        return Str::of($this->name)
-            ->explode(' ')
-            ->take(2)
-            ->map(fn ($word) => Str::substr($word, 0, 1))
-            ->implode('');
+        $name = trim((string) $this->name);
+
+        if ($name === '') {
+            return 'U';
+        }
+
+        $parts = preg_split('/\s+/', $name);
+
+        if (count($parts) >= 2) {
+            return Str::upper(
+                Str::substr($parts[0], 0, 1) .
+                Str::substr($parts[1], 0, 1)
+            );
+        }
+
+        return Str::upper(Str::substr($name, 0, 2));
     }
 }

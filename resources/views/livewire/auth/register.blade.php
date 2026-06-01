@@ -1,4 +1,10 @@
 <x-layouts::auth :title="__('Register')">
+    @php
+        $agentFromLink = request('agent');
+        $oldRole = old('role', $agentFromLink ? 'player' : 'player');
+        $oldAgentCode = old('agent_code', $agentFromLink);
+    @endphp
+
     <div
         style="
             width:100%;
@@ -68,6 +74,25 @@
             >
                 Register as Player, Agent, or Admin.
             </p>
+
+            @if($agentFromLink)
+                <div
+                    style="
+                        margin-top:16px;
+                        border-radius:16px;
+                        padding:12px 14px;
+                        background:#eff6ff;
+                        color:#1d4ed8;
+                        border:1px solid #bfdbfe;
+                        font-size:13px;
+                        font-weight:900;
+                        line-height:1.5;
+                    "
+                >
+                    You are registering under agent code:
+                    <strong>{{ $agentFromLink }}</strong>
+                </div>
+            @endif
         </div>
 
         <div style="margin-top:22px;">
@@ -214,18 +239,26 @@
                         font-weight:900;
                     "
                 >
-                    <option value="player" @selected(old('role', 'player') === 'player')>
+                    <option value="player" @selected($oldRole === 'player')>
                         Player
                     </option>
 
-                    <option value="agent" @selected(old('role') === 'agent')>
-                        Agent
-                    </option>
+                    @if(!$agentFromLink)
+                        <option value="agent" @selected($oldRole === 'agent')>
+                            Agent
+                        </option>
 
-                    <option value="admin" @selected(old('role') === 'admin')>
-                        Admin
-                    </option>
+                        <option value="admin" @selected($oldRole === 'admin')>
+                            Admin
+                        </option>
+                    @endif
                 </select>
+
+                @if($agentFromLink)
+                    <p style="margin:6px 0 0;color:#64748b;font-size:12px;font-weight:800;">
+                        Agent link detected. This account will be registered as player.
+                    </p>
+                @endif
 
                 @error('role')
                     <p style="margin:6px 0 0;color:#dc2626;font-size:12px;font-weight:800;">
@@ -251,15 +284,16 @@
                 <input
                     id="agent_code"
                     name="agent_code"
-                    value="{{ old('agent_code') }}"
+                    value="{{ $oldAgentCode }}"
                     type="text"
                     placeholder="Enter agent code"
+                    @if($agentFromLink) readonly @endif
                     style="
                         width:100%;
                         height:50px;
                         border-radius:14px;
                         border:1px solid #dce6f2;
-                        background:#ffffff;
+                        background:{{ $agentFromLink ? '#f8fafc' : '#ffffff' }};
                         padding:0 14px;
                         outline:none;
                         color:#0f172a;
