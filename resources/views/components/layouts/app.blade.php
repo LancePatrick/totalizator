@@ -69,7 +69,7 @@
             <div class="sidebar-inner">
                 <a href="{{ route('dashboard') }}" class="brand">
                     <div class="brand-mark">⚡</div>
-                    <div class="brand-text">J <span>L</span></div>
+                    <div class="brand-text">SAMPLE <span>SYSTEM</span></div>
                 </a>
 
                 <p class="panel-label">{{ $panelLabel }}</p>
