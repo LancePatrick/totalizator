@@ -13,29 +13,67 @@ use Illuminate\Support\Facades\DB;
 
 class PlayerGameController extends Controller
 {
-    public function index()
+    public function index(Request $request)
     {
-        $currentGame = $this->currentPlayerGame();
+        $gameRooms = $this->availableRooms();
+
+        $currentGame = null;
+
+        if ($request->filled('game_id')) {
+            $currentGame = GameRound::whereKey($request->game_id)
+                ->whereIn('status', ['waiting', 'open', 'closed', 'settled'])
+                ->first();
+        }
+
+        if (!$currentGame && $request->filled('game_id')) {
+            return redirect()
+                ->route('player.game.index')
+                ->withErrors(['game' => 'This game room is ended or not available anymore.']);
+        }
 
         return view('player.game.index', [
             'currentGame' => $currentGame,
+            'gameRooms' => $gameRooms,
+            'selectedGameId' => $currentGame?->id,
             'logrohan' => LogrohanEntry::latest()->take(240)->get(),
             'myBets' => GameBet::with('round')
                 ->where('user_id', auth()->id())
+                ->when($currentGame, function ($query) use ($currentGame) {
+                    $query->where('game_round_id', $currentGame->id);
+                })
                 ->latest()
                 ->take(15)
                 ->get(),
         ]);
     }
 
-    public function liveData()
+    public function liveData(Request $request)
     {
-        $currentGame = $this->currentPlayerGame();
+        $currentGame = null;
+
+        if ($request->filled('game_id')) {
+            $currentGame = GameRound::whereKey($request->game_id)
+                ->whereIn('status', ['waiting', 'open', 'closed', 'settled'])
+                ->first();
+        }
 
         $user = User::whereKey(auth()->id())->first();
 
+        $rooms = $this->availableRooms()->map(function ($game) {
+            return [
+                'id' => $game->id,
+                'title' => $game->title ?? $game->round_name ?? 'Game Room',
+                'round_code' => $game->round_code ?? $game->round_number ?? $game->id,
+                'status' => $game->status,
+                'total_pool' => (float) ($game->total_pool ?? 0),
+            ];
+        });
+
         $myBets = GameBet::with('round')
             ->where('user_id', auth()->id())
+            ->when($currentGame, function ($query) use ($currentGame) {
+                $query->where('game_round_id', $currentGame->id);
+            })
             ->latest()
             ->take(10)
             ->get()
@@ -52,14 +90,12 @@ class PlayerGameController extends Controller
                 ];
             });
 
-        $logrohan = LogrohanEntry::latest()
-            ->take(240)
-            ->get();
+        $logrohan = LogrohanEntry::latest()->take(240)->get();
 
         $normalizeSide = function ($entry) {
             $side = strtolower($entry->winning_side ?? $entry->result ?? $entry->side ?? 'cancelled');
 
-            if ($side === 'canceled' || $side === 'cancel') {
+            if (in_array($side, ['cancel', 'canceled'])) {
                 $side = 'cancelled';
             }
 
@@ -79,6 +115,7 @@ class PlayerGameController extends Controller
             return response()->json([
                 'has_game' => false,
                 'wallet_balance' => (float) ($user->wallet_balance ?? 0),
+                'rooms' => $rooms,
                 'my_bets' => $myBets,
                 'road_counts' => [
                     'meron' => $meronCount,
@@ -92,10 +129,11 @@ class PlayerGameController extends Controller
         return response()->json([
             'has_game' => true,
             'wallet_balance' => (float) ($user->wallet_balance ?? 0),
+            'rooms' => $rooms,
 
             'game' => [
                 'id' => $currentGame->id,
-                'title' => $currentGame->title ?? $currentGame->round_name ?? 'Current Game',
+                'title' => $currentGame->title ?? $currentGame->round_name ?? 'Game Room',
                 'round_code' => $currentGame->round_code ?? $currentGame->round_number ?? $currentGame->id,
                 'status' => $currentGame->status,
 
@@ -140,22 +178,28 @@ class PlayerGameController extends Controller
                 ->lockForUpdate()
                 ->firstOrFail();
 
+            if (in_array($game->status, ['ended', 'settled'])) {
+                return redirect()
+                    ->route('player.game.index', ['game_id' => $game->id])
+                    ->withErrors(['game' => 'This game room is already declared. Please choose another open room.']);
+            }
+
             if ($game->status !== 'open') {
-                return back()->withErrors([
-                    'game' => 'Betting is closed. Please wait for the admin to start a new open game.',
-                ]);
+                return redirect()
+                    ->route('player.game.index', ['game_id' => $game->id])
+                    ->withErrors(['game' => 'Betting is closed. Please choose an open room.']);
             }
 
             if (!$player->is_active) {
-                return back()->withErrors([
-                    'account' => 'Your account is inactive.',
-                ]);
+                return redirect()
+                    ->route('player.game.index', ['game_id' => $game->id])
+                    ->withErrors(['account' => 'Your account is inactive.']);
             }
 
             if ((float) $player->wallet_balance < $amount) {
-                return back()->withErrors([
-                    'amount' => 'Insufficient wallet balance.',
-                ]);
+                return redirect()
+                    ->route('player.game.index', ['game_id' => $game->id])
+                    ->withErrors(['amount' => 'Insufficient wallet balance.']);
             }
 
             $oddsAtBet = match ($data['side']) {
@@ -196,15 +240,17 @@ class PlayerGameController extends Controller
 
             $game->recalculateTotalsAndOdds();
 
-            return back()->with('success', 'Bet placed successfully.');
+            return redirect()
+                ->route('player.game.index', ['game_id' => $game->id])
+                ->with('success', 'Bet placed successfully.');
         });
     }
 
-    private function currentPlayerGame()
+    private function availableRooms()
     {
-        return GameRound::whereIn('status', ['waiting', 'open', 'closed', 'ended'])
+        return GameRound::whereIn('status', ['waiting', 'open', 'closed', 'settled'])
             ->latest('id')
-            ->first()
-            ?? GameRound::latest('id')->first();
+            ->take(50)
+            ->get();
     }
 }

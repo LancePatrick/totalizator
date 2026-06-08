@@ -1,6 +1,7 @@
 <x-layouts.app :title="__('Admin Game Control')">
     @php
         $selectedGameId = request('game_id') ?: $currentGame?->id;
+        $hasSelectedGame = request()->filled('game_id') && $currentGame;
 
         $status = $currentGame?->status ?? 'no_game';
 
@@ -31,6 +32,19 @@
         $meronOdds = (float) ($currentGame->meron_odds ?? 0);
         $walaOdds = (float) ($currentGame->wala_odds ?? 0);
         $drawOdds = (float) ($currentGame->draw_odds ?? 0);
+
+        $videoUrl = $currentGame->video_url ?? null;
+        $youtubeEmbedUrl = null;
+
+        if ($videoUrl) {
+            if (preg_match('/youtu\.be\/([^?&]+)/', $videoUrl, $matches)) {
+                $youtubeEmbedUrl = 'https://www.youtube.com/embed/' . $matches[1];
+            } elseif (preg_match('/youtube\.com\/watch\?v=([^?&]+)/', $videoUrl, $matches)) {
+                $youtubeEmbedUrl = 'https://www.youtube.com/embed/' . $matches[1];
+            } elseif (preg_match('/youtube\.com\/embed\/([^?&]+)/', $videoUrl, $matches)) {
+                $youtubeEmbedUrl = $videoUrl;
+            }
+        }
 
         $cards = [
             [
@@ -75,7 +89,7 @@
     <div class="space-y-5">
         <section class="relative overflow-hidden rounded-3xl bg-gradient-to-br from-slate-950 via-blue-950 to-blue-700 p-6 text-white shadow-xl sm:p-8">
             <div class="absolute inset-0 opacity-30 [background-image:linear-gradient(90deg,rgba(255,255,255,.08)_1px,transparent_1px),linear-gradient(rgba(255,255,255,.06)_1px,transparent_1px)] [background-size:54px_54px]"></div>
-            <div class="absolute -right-3 top-2 hidden rotate-[-10deg] text-8xl drop-shadow-2xl md:block">🏁</div>
+            <div class="absolute -right-3 top-2 hidden rotate-[-10deg] text-8xl drop-shadow-2xl md:block">🎮</div>
 
             <div class="relative z-10 flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
                 <div>
@@ -84,11 +98,11 @@
                     </p>
 
                     <h1 class="mt-2 text-3xl font-black tracking-tight sm:text-4xl">
-                        Horse Racing Totalizator
+                        Game Rooms Totalizator
                     </h1>
 
                     <p class="mt-3 max-w-4xl text-sm font-bold leading-6 text-white/80">
-                        Create rounds, select ongoing games, keep settled games visible, and start the next round with fresh totals.
+                        Create game rooms, click a room to enter it, then start betting, close betting, end game, and declare result.
                     </p>
                 </div>
 
@@ -122,15 +136,40 @@
             </div>
         @endif
 
-        <section class="grid gap-5 xl:grid-cols-[360px_minmax(0,1fr)]">
-            <aside class="space-y-5">
-                <div class="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-                    <h2 class="text-2xl font-black tracking-tight text-slate-950">
-                        Create Game Round
+        @if($hasSelectedGame)
+            <div class="flex flex-col gap-3 rounded-3xl border border-blue-100 bg-blue-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                    <p class="text-xs font-black uppercase tracking-[.18em] text-blue-600">
+                        Selected Room
+                    </p>
+
+                    <h2 class="mt-1 text-xl font-black text-slate-950">
+                        {{ $currentGame->title ?? $currentGame->round_name ?? 'Game Room' }}
                     </h2>
 
                     <p class="mt-1 text-sm font-bold text-slate-500">
-                        New round starts with fresh totals.
+                        Room Code: {{ $currentGame->round_code ?? $currentGame->round_number ?? $currentGame->id }}
+                    </p>
+                </div>
+
+                <a
+                    href="{{ route('admin.games.index') }}"
+                    class="inline-flex h-11 items-center justify-center rounded-2xl bg-slate-950 px-5 text-xs font-black uppercase tracking-wide text-white transition hover:-translate-y-0.5 hover:bg-slate-800"
+                >
+                    ← Back to Game List
+                </a>
+            </div>
+        @endif
+
+        <section class="grid gap-5 xl:grid-cols-[380px_minmax(0,1fr)]">
+            <aside class="space-y-5">
+                <div class="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+                    <h2 class="text-2xl font-black tracking-tight text-slate-950">
+                        Create Game Room
+                    </h2>
+
+                    <p class="mt-1 text-sm font-bold text-slate-500">
+                        Create any title. Room code is auto-generated if blank.
                     </p>
 
                     <form method="POST" action="{{ route('admin.games.store') }}" class="mt-5 space-y-4">
@@ -138,41 +177,41 @@
 
                         <div>
                             <label class="mb-2 block text-xs font-black uppercase tracking-[.14em] text-slate-600">
-                                Round Name
+                                Game Title
                             </label>
 
                             <input
-                                name="round_name"
+                                name="game_title"
                                 required
-                                value="{{ old('round_name') }}"
+                                value="{{ old('game_title') }}"
                                 class="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-950 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
-                                placeholder="Horse Race Round 1"
+                                placeholder="Horse Racing, Basketball Finals, Volleyball Match"
                             >
                         </div>
 
                         <div>
                             <label class="mb-2 block text-xs font-black uppercase tracking-[.14em] text-slate-600">
-                                Round Number
+                                Room Code Optional
                             </label>
 
                             <input
                                 name="round_number"
                                 value="{{ old('round_number') }}"
                                 class="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-950 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
-                                placeholder="R-001"
+                                placeholder="Auto if blank"
                             >
                         </div>
 
                         <div>
                             <label class="mb-2 block text-xs font-black uppercase tracking-[.14em] text-slate-600">
-                                Video URL
+                                YouTube / Video URL
                             </label>
 
                             <textarea
                                 name="video_url"
                                 rows="3"
                                 class="w-full resize-y rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-950 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
-                                placeholder="/videos/race.mp4 or https://example.com/race.mp4"
+                                placeholder="https://youtube.com/watch?v=... or https://youtu.be/..."
                             >{{ old('video_url') }}</textarea>
                         </div>
 
@@ -187,7 +226,7 @@
                         </div>
 
                         <button class="h-12 w-full rounded-2xl bg-blue-600 text-sm font-black uppercase tracking-wide text-white shadow-lg shadow-blue-600/20 transition hover:-translate-y-0.5 hover:bg-blue-700">
-                            Create New Round
+                            Create Game Room
                         </button>
                     </form>
                 </div>
@@ -196,20 +235,20 @@
                     <div class="flex items-center justify-between gap-3">
                         <div>
                             <h2 class="text-xl font-black tracking-tight text-slate-950">
-                                Game List
+                                Game Rooms
                             </h2>
 
                             <p class="mt-1 text-xs font-bold text-slate-500">
-                                Select ongoing or settled rounds.
+                                Ended rooms are hidden. Declared rooms stay visible.
                             </p>
                         </div>
 
                         <span class="rounded-full bg-blue-50 px-3 py-1 text-xs font-black uppercase text-blue-700">
-                            {{ $gameList->count() }} games
+                            {{ $gameList->count() }} rooms
                         </span>
                     </div>
 
-                    <div class="mt-4 space-y-2" id="adminGameList">
+                    <div class="mt-4 space-y-3">
                         @forelse($gameList as $game)
                             @php
                                 $gameStatus = strtolower($game->status ?? 'waiting');
@@ -218,43 +257,48 @@
                                     'open' => 'bg-green-100 text-green-700',
                                     'waiting' => 'bg-yellow-100 text-yellow-700',
                                     'closed' => 'bg-blue-100 text-blue-700',
-                                    'ended' => 'bg-red-100 text-red-700',
                                     'settled' => 'bg-violet-100 text-violet-700',
                                     default => 'bg-slate-100 text-slate-600',
                                 };
 
-                                $activeClass = (int) $selectedGameId === (int) $game->id
+                                $activeClass = (int) $selectedGameId === (int) $game->id && $hasSelectedGame
                                     ? 'border-blue-500 bg-blue-50 ring-4 ring-blue-100'
-                                    : 'border-slate-200 bg-white hover:bg-slate-50';
+                                    : 'border-slate-200 bg-white hover:border-blue-300 hover:bg-blue-50 hover:shadow-lg hover:shadow-blue-100/60';
                             @endphp
 
                             <a
                                 href="{{ route('admin.games.index', ['game_id' => $game->id]) }}"
-                                class="block rounded-2xl border p-3 transition {{ $activeClass }}"
+                                class="group block rounded-3xl border p-4 transition duration-200 hover:-translate-y-1 {{ $activeClass }}"
                             >
-                                <div class="flex items-start justify-between gap-2">
+                                <div class="flex items-start justify-between gap-3">
                                     <div class="min-w-0">
-                                        <p class="truncate text-sm font-black text-slate-950">
-                                            {{ $game->title ?? $game->round_name ?? 'Game Round' }}
+                                        <p class="truncate text-sm font-black text-slate-950 transition group-hover:text-blue-700">
+                                            {{ $game->title ?? $game->round_name ?? 'Game Room' }}
                                         </p>
 
                                         <p class="mt-1 text-xs font-bold text-slate-500">
-                                            Round: {{ $game->round_code ?? $game->round_number ?? $game->id }}
+                                            Room: {{ $game->round_code ?? $game->round_number ?? $game->id }}
                                         </p>
 
-                                        <p class="mt-1 text-xs font-bold text-slate-400">
-                                            ₱{{ number_format((float) ($game->total_pool ?? 0), 2) }} pool
-                                        </p>
+                                        <div class="mt-3 flex flex-wrap items-center gap-2">
+                                            <span class="rounded-full bg-slate-100 px-3 py-1 text-[10px] font-black uppercase text-slate-600">
+                                                Pool ₱{{ number_format((float) ($game->total_pool ?? 0), 2) }}
+                                            </span>
+
+                                            <span class="rounded-full px-3 py-1 text-[10px] font-black uppercase {{ $gameStatusClass }}">
+                                                {{ $gameStatus }}
+                                            </span>
+                                        </div>
                                     </div>
 
-                                    <span class="shrink-0 rounded-full px-2 py-1 text-[10px] font-black uppercase {{ $gameStatusClass }}">
-                                        {{ $gameStatus }}
-                                    </span>
+                                    <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-md shadow-blue-600/20 transition group-hover:scale-110">
+                                        →
+                                    </div>
                                 </div>
                             </a>
                         @empty
                             <div class="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm font-black text-slate-500">
-                                No games created yet.
+                                No game rooms.
                             </div>
                         @endforelse
                     </div>
@@ -262,28 +306,42 @@
             </aside>
 
             <main class="space-y-5">
-                <section class="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-                    <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                        <div>
-                            <h2 class="text-2xl font-black tracking-tight text-slate-950">
-                                Current Selected Game
+                @if(!$hasSelectedGame)
+                    <section class="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+                        <div class="mx-auto max-w-2xl text-center">
+                            <div class="mx-auto flex h-20 w-20 items-center justify-center rounded-3xl bg-blue-50 text-4xl">
+                                🎮
+                            </div>
+
+                            <h2 class="mt-5 text-3xl font-black tracking-tight text-slate-950">
+                                Select a Game Room
                             </h2>
 
-                            <p class="mt-1 text-sm font-bold text-slate-500">
-                                Live video, totals, odds, status, and controls.
+                            <p class="mt-3 text-sm font-bold leading-6 text-slate-500">
+                                Click any room from the list on the left. Ended rooms are hidden, but declared rooms stay visible.
                             </p>
+                        </div>
+                    </section>
+                @else
+                    <section class="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+                        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                            <div>
+                                <h2 class="text-2xl font-black tracking-tight text-slate-950" data-live="game_title">
+                                    {{ $currentGame->title ?? $currentGame->round_name ?? 'Selected Game Room' }}
+                                </h2>
 
-                            @if($currentGame)
+                                <p class="mt-1 text-sm font-bold text-slate-500">
+                                    Live video, totals, odds, status, and room controls.
+                                </p>
+
                                 <p class="mt-2 text-xs font-black uppercase tracking-[.14em] text-slate-400">
-                                    Round:
+                                    Room:
                                     <span data-live="round_code">
                                         {{ $currentGame->round_code ?? $currentGame->round_number ?? $currentGame->id }}
                                     </span>
                                 </p>
-                            @endif
-                        </div>
+                            </div>
 
-                        @if($currentGame)
                             <span
                                 data-live="game_status"
                                 class="inline-flex w-fit items-center justify-center rounded-full px-3 py-2 text-xs font-black uppercase"
@@ -291,15 +349,7 @@
                             >
                                 {{ strtoupper($currentGame->status) }}
                             </span>
-                        @endif
-                    </div>
-
-                    @if($currentGame)
-                        @if($currentGame->status === 'settled')
-                            <div class="mt-4 rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3 text-sm font-extrabold text-violet-800">
-                                This game is already settled. It stays visible here for review. Create a new round to reset totals and start again.
-                            </div>
-                        @endif
+                        </div>
 
                         <div class="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                             @foreach($cards as $card)
@@ -326,9 +376,17 @@
                         </div>
 
                         <div class="mt-5 rounded-3xl bg-slate-950 p-3 sm:p-4">
-                            @if($currentGame->video_url)
+                            @if($youtubeEmbedUrl)
+                                <iframe
+                                    class="aspect-video w-full rounded-2xl border border-white/10 bg-black"
+                                    src="{{ $youtubeEmbedUrl }}"
+                                    title="Game Video"
+                                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                                    allowfullscreen
+                                ></iframe>
+                            @elseif($videoUrl)
                                 <video class="aspect-video w-full rounded-2xl border border-white/10 bg-black object-contain" controls playsinline>
-                                    <source src="{{ $currentGame->video_url }}" type="video/mp4">
+                                    <source src="{{ $videoUrl }}">
                                     Your browser does not support the video tag.
                                 </video>
                             @else
@@ -344,21 +402,21 @@
                         <div class="mt-5 grid gap-3 lg:grid-cols-[1fr_1fr_1fr_2fr]">
                             <form method="POST" action="{{ route('admin.games.start', $currentGame) }}">
                                 @csrf
-                                <button class="h-12 w-full rounded-2xl bg-green-600 text-xs font-black uppercase tracking-wide text-white transition hover:bg-green-700">
-                                    Start
+                                <button class="h-12 w-full rounded-2xl bg-green-600 text-xs font-black uppercase tracking-wide text-white transition hover:-translate-y-0.5 hover:bg-green-700">
+                                    Start This Room
                                 </button>
                             </form>
 
                             <form method="POST" action="{{ route('admin.games.close', $currentGame) }}">
                                 @csrf
-                                <button class="h-12 w-full rounded-2xl bg-orange-500 text-xs font-black uppercase tracking-wide text-white transition hover:bg-orange-600">
+                                <button class="h-12 w-full rounded-2xl bg-orange-500 text-xs font-black uppercase tracking-wide text-white transition hover:-translate-y-0.5 hover:bg-orange-600">
                                     Close Betting
                                 </button>
                             </form>
 
                             <form method="POST" action="{{ route('admin.games.end', $currentGame) }}">
                                 @csrf
-                                <button class="h-12 w-full rounded-2xl bg-slate-950 text-xs font-black uppercase tracking-wide text-white transition hover:bg-slate-800">
+                                <button class="h-12 w-full rounded-2xl bg-slate-950 text-xs font-black uppercase tracking-wide text-white transition hover:-translate-y-0.5 hover:bg-slate-800">
                                     End Game
                                 </button>
                             </form>
@@ -376,17 +434,13 @@
                                     <option value="cancelled">Cancelled</option>
                                 </select>
 
-                                <button class="h-12 rounded-2xl bg-yellow-400 px-6 text-xs font-black uppercase tracking-wide text-slate-950 transition hover:bg-yellow-300">
+                                <button class="h-12 rounded-2xl bg-yellow-400 px-6 text-xs font-black uppercase tracking-wide text-slate-950 transition hover:-translate-y-0.5 hover:bg-yellow-300">
                                     Declare
                                 </button>
                             </form>
                         </div>
-                    @else
-                        <div class="mt-5 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-10 text-center text-sm font-black text-slate-500">
-                            No game created yet.
-                        </div>
-                    @endif
-                </section>
+                    </section>
+                @endif
 
                 <section class="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
                     <div>
@@ -404,7 +458,7 @@
                             @php
                                 $result = strtolower($entry->result ?? $entry->winning_side ?? 'cancelled');
 
-                                if ($result === 'canceled' || $result === 'cancel') {
+                                if (in_array($result, ['cancel', 'canceled'])) {
                                     $result = 'cancelled';
                                 }
 
@@ -421,7 +475,7 @@
                             @endphp
 
                             <span class="rounded-full px-3 py-2 text-xs font-black uppercase {{ $pillClass }}">
-                                {{ $entry->round_number ?? $entry->round_code ?? 'Round' }} - {{ strtoupper($result) }}
+                                {{ $entry->round_number ?? $entry->round_code ?? 'Room' }} - {{ strtoupper($result) }}
                             </span>
                         @empty
                             <div class="w-full rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-sm font-black text-slate-500">
@@ -436,8 +490,8 @@
 
     <script>
         document.addEventListener('DOMContentLoaded', function () {
-            const selectedGameId = @json($selectedGameId);
-            const liveUrl = @json(route('admin.games.live')) + '?game_id=' + encodeURIComponent(selectedGameId || '');
+            const selectedGameId = @json($hasSelectedGame ? $selectedGameId : null);
+            const liveUrl = @json(route('admin.games.live')) + (selectedGameId ? '?game_id=' + encodeURIComponent(selectedGameId) : '');
 
             const money = (value) => {
                 const number = Number(value || 0);
@@ -516,6 +570,10 @@
             };
 
             const loadLiveAdminGame = async () => {
+                if (!selectedGameId) {
+                    return;
+                }
+
                 try {
                     const response = await fetch(liveUrl, {
                         headers: {
@@ -531,7 +589,13 @@
 
                     const data = await response.json();
 
+                    if (!data.has_game && selectedGameId) {
+                        window.location.href = @json(route('admin.games.index'));
+                        return;
+                    }
+
                     if (data.has_game && data.game) {
+                        setAll('game_title', data.game.title);
                         setAll('round_code', data.game.round_code);
 
                         setAll('meron_total', money(data.game.meron_total));
@@ -549,6 +613,7 @@
 
                         if (statusEl) {
                             const style = statusStyle(status);
+
                             statusEl.textContent = status.toUpperCase();
                             statusEl.style.background = style.bg;
                             statusEl.style.color = style.color;

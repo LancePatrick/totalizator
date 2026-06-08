@@ -80,7 +80,7 @@ Route::middleware(['auth'])->group(function () {
 
         /*
         |--------------------------------------------------------------------------
-        | Admin Game Control
+        | Admin Game Rooms / Totalizator
         |--------------------------------------------------------------------------
         */
 
@@ -286,6 +286,16 @@ Route::middleware(['auth'])->group(function () {
         Route::get('/dashboard', [PlayerDashboardController::class, 'index'])
             ->name('dashboard');
 
+        /*
+        |--------------------------------------------------------------------------
+        | Player Game Rooms
+        |--------------------------------------------------------------------------
+        |
+        | Play Game sidebar/button should point to:
+        | route('player.game.index')
+        |
+        */
+
         Route::get('/game', [PlayerGameController::class, 'index'])
             ->name('game.index');
 
@@ -295,11 +305,23 @@ Route::middleware(['auth'])->group(function () {
         Route::post('/game/bet', [PlayerGameController::class, 'bet'])
             ->name('game.bet');
 
+        /*
+        |--------------------------------------------------------------------------
+        | Player KYC
+        |--------------------------------------------------------------------------
+        */
+
         Route::get('/kyc', [PlayerKycController::class, 'index'])
             ->name('kyc.index');
 
         Route::post('/kyc', [PlayerKycController::class, 'store'])
             ->name('kyc.store');
+
+        /*
+        |--------------------------------------------------------------------------
+        | Player Wallet
+        |--------------------------------------------------------------------------
+        */
 
         Route::get('/wallet', [PlayerWalletController::class, 'index'])
             ->name('wallet.index');

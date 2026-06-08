@@ -1,13 +1,16 @@
-<x-layouts.app :title="__('Game')">
+<x-layouts.app :title="__('Play Game')">
     @php
         $user = auth()->user();
+
+        $selectedGameId = request('game_id') ?: $currentGame?->id;
+        $hasSelectedGame = request()->filled('game_id') && $currentGame;
 
         $status = $currentGame?->status ?? 'no_game';
 
         $isOpen = $currentGame && $currentGame->status === 'open';
         $isWaiting = $currentGame && $currentGame->status === 'waiting';
         $isClosed = $currentGame && $currentGame->status === 'closed';
-        $isEnded = $currentGame && in_array($currentGame->status, ['ended', 'settled']);
+        $isSettled = $currentGame && $currentGame->status === 'settled';
 
         $meronTotal = (float) ($currentGame->meron_total ?? 0);
         $walaTotal = (float) ($currentGame->wala_total ?? 0);
@@ -23,7 +26,6 @@
             'open' => '#16a34a',
             'waiting' => '#d97706',
             'closed' => '#2563eb',
-            'ended' => '#dc2626',
             'settled' => '#7c3aed',
             default => '#64748b',
         };
@@ -32,43 +34,22 @@
             'open' => '#dcfce7',
             'waiting' => '#fef3c7',
             'closed' => '#dbeafe',
-            'ended' => '#fee2e2',
             'settled' => '#f3e8ff',
             default => '#f1f5f9',
         };
 
-        $roadEntries = collect($logrohan ?? [])
-            ->take(240)
-            ->reverse()
-            ->values();
+        $videoUrl = $currentGame->video_url ?? null;
+        $youtubeEmbedUrl = null;
 
-        $normalizeSide = function ($entry) {
-            $side = strtolower($entry->winning_side ?? $entry->result ?? $entry->side ?? 'cancelled');
-
-            if ($side === 'canceled' || $side === 'cancel') {
-                $side = 'cancelled';
+        if ($videoUrl) {
+            if (preg_match('/youtu\.be\/([^?&]+)/', $videoUrl, $matches)) {
+                $youtubeEmbedUrl = 'https://www.youtube.com/embed/' . $matches[1];
+            } elseif (preg_match('/youtube\.com\/watch\?v=([^?&]+)/', $videoUrl, $matches)) {
+                $youtubeEmbedUrl = 'https://www.youtube.com/embed/' . $matches[1];
+            } elseif (preg_match('/youtube\.com\/embed\/([^?&]+)/', $videoUrl, $matches)) {
+                $youtubeEmbedUrl = $videoUrl;
             }
-
-            if (!in_array($side, ['meron', 'wala', 'draw', 'cancelled'])) {
-                $side = 'cancelled';
-            }
-
-            return $side;
-        };
-
-        $sideLabel = function ($side) {
-            return match ($side) {
-                'meron' => 'M',
-                'wala' => 'W',
-                'draw' => 'D',
-                default => 'C',
-            };
-        };
-
-        $meronCount = $roadEntries->filter(fn ($entry) => $normalizeSide($entry) === 'meron')->count();
-        $walaCount = $roadEntries->filter(fn ($entry) => $normalizeSide($entry) === 'wala')->count();
-        $drawCount = $roadEntries->filter(fn ($entry) => $normalizeSide($entry) === 'draw')->count();
-        $cancelledCount = $roadEntries->filter(fn ($entry) => $normalizeSide($entry) === 'cancelled')->count();
+        }
 
         $summaryCards = [
             [
@@ -152,49 +133,6 @@
                 'oddsKey' => 'draw_odds',
             ],
         ];
-
-        $bigRoadPositions = [];
-        $occupied = [];
-        $lastSide = null;
-        $currentCol = -1;
-        $currentRow = 0;
-
-        foreach ($roadEntries as $index => $entry) {
-            $side = $normalizeSide($entry);
-
-            if ($side !== $lastSide) {
-                $currentCol++;
-                $currentRow = 0;
-                $lastSide = $side;
-
-                while (isset($occupied[$currentCol . '-0'])) {
-                    $currentCol++;
-                }
-            } else {
-                $nextRow = $currentRow + 1;
-
-                if ($nextRow <= 5 && !isset($occupied[$currentCol . '-' . $nextRow])) {
-                    $currentRow = $nextRow;
-                } else {
-                    $currentCol++;
-
-                    while (isset($occupied[$currentCol . '-' . $currentRow])) {
-                        $currentCol++;
-                    }
-                }
-            }
-
-            $occupied[$currentCol . '-' . $currentRow] = true;
-
-            $bigRoadPositions[] = [
-                'entry' => $entry,
-                'side' => $side,
-                'label' => $sideLabel($side),
-                'row' => $currentRow,
-                'col' => $currentCol,
-                'index' => $index,
-            ];
-        }
     @endphp
 
     <div class="game-page">
@@ -205,12 +143,12 @@
                 <div>
                     <p class="game-kicker">Player</p>
 
-                    <h1 class="game-title">
-                        Horse Racing
+                    <h1 class="game-title" data-live="game_title">
+                        {{ $hasSelectedGame ? ($currentGame->title ?? $currentGame->round_name ?? 'Game Room') : 'Choose Game Room' }}
                     </h1>
 
                     <p class="game-subtitle">
-                        Bet on Meron, Wala, or Draw. Odds update based on the total pool.
+                        Choose an active game room, watch the live video, and place your bet.
                     </p>
                 </div>
 
@@ -244,12 +182,110 @@
             </div>
         @endif
 
-        @if(!$currentGame)
-            <div class="game-card">
-                <div class="game-empty">
-                    No game available yet. Please wait for the admin to create and start a game.
+        @if($hasSelectedGame)
+            <div class="flex flex-col gap-3 rounded-3xl border border-blue-100 bg-blue-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                    <p class="text-xs font-black uppercase tracking-[.18em] text-blue-600">
+                        Selected Room
+                    </p>
+
+                    <h2 class="mt-1 text-xl font-black text-slate-950">
+                        {{ $currentGame->title ?? $currentGame->round_name ?? 'Game Room' }}
+                    </h2>
+
+                    <p class="mt-1 text-sm font-bold text-slate-500">
+                        Room Code: {{ $currentGame->round_code ?? $currentGame->round_number ?? $currentGame->id }}
+                    </p>
                 </div>
+
+                <a
+                    href="{{ route('player.game.index') }}"
+                    class="inline-flex h-11 items-center justify-center rounded-2xl bg-slate-950 px-5 text-xs font-black uppercase tracking-wide text-white transition hover:-translate-y-0.5 hover:bg-slate-800"
+                >
+                    ← Back to Rooms
+                </a>
             </div>
+        @endif
+
+        <section class="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                    <h2 class="text-2xl font-black tracking-tight text-slate-950">
+                        Game Rooms
+                    </h2>
+
+                    <p class="mt-1 text-sm font-bold text-slate-500">
+                        Ended rooms are hidden. Declared rooms stay visible.
+                    </p>
+                </div>
+
+                <span class="w-fit rounded-full bg-blue-50 px-3 py-1 text-xs font-black uppercase text-blue-700">
+                    {{ collect($gameRooms ?? [])->count() }} rooms
+                </span>
+            </div>
+
+            <div class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4" id="playerRoomsList">
+                @forelse($gameRooms ?? [] as $room)
+                    @php
+                        $roomStatus = strtolower($room->status ?? 'waiting');
+
+                        $roomStatusClass = match ($roomStatus) {
+                            'open' => 'bg-green-100 text-green-700',
+                            'waiting' => 'bg-yellow-100 text-yellow-700',
+                            'closed' => 'bg-blue-100 text-blue-700',
+                            'settled' => 'bg-violet-100 text-violet-700',
+                            default => 'bg-slate-100 text-slate-600',
+                        };
+
+                        $activeClass = (int) ($selectedGameId ?? 0) === (int) $room->id && $hasSelectedGame
+                            ? 'border-blue-500 bg-blue-50 ring-4 ring-blue-100'
+                            : 'border-slate-200 bg-white hover:border-blue-300 hover:bg-blue-50 hover:shadow-lg hover:shadow-blue-100/60';
+                    @endphp
+
+                    <a
+                        href="{{ route('player.game.index', ['game_id' => $room->id]) }}"
+                        class="group rounded-3xl border p-4 transition duration-200 hover:-translate-y-1 {{ $activeClass }}"
+                    >
+                        <div class="flex items-start justify-between gap-3">
+                            <div class="min-w-0">
+                                <h3 class="truncate text-base font-black text-slate-950 transition group-hover:text-blue-700">
+                                    {{ $room->title ?? $room->round_name ?? 'Game Room' }}
+                                </h3>
+
+                                <p class="mt-1 text-xs font-bold text-slate-500">
+                                    Room: {{ $room->round_code ?? $room->round_number ?? $room->id }}
+                                </p>
+
+                                <div class="mt-3 flex flex-wrap items-center gap-2">
+                                    <span class="rounded-full bg-slate-100 px-3 py-1 text-[10px] font-black uppercase text-slate-600">
+                                        Pool ₱{{ number_format((float) ($room->total_pool ?? 0), 2) }}
+                                    </span>
+
+                                    <span class="rounded-full px-3 py-1 text-[10px] font-black uppercase {{ $roomStatusClass }}">
+                                        {{ $roomStatus }}
+                                    </span>
+                                </div>
+                            </div>
+
+                            <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-md shadow-blue-600/20 transition group-hover:scale-110">
+                                →
+                            </div>
+                        </div>
+                    </a>
+                @empty
+                    <div class="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-sm font-black text-slate-500 sm:col-span-2 xl:col-span-4">
+                        No game rooms.
+                    </div>
+                @endforelse
+            </div>
+        </section>
+
+        @if(!$hasSelectedGame)
+            <section class="game-card">
+                <div class="game-empty">
+                    Select a game room above to enter the betting area.
+                </div>
+            </section>
         @else
             <section class="game-shell">
                 <main class="game-left">
@@ -257,12 +293,12 @@
                         <div class="game-video-card">
                             <div class="game-video-head">
                                 <div>
-                                    <h2 class="game-card-title">
-                                        {{ $currentGame->title ?? 'Current Game' }}
+                                    <h2 class="game-card-title" data-live="game_title">
+                                        {{ $currentGame->title ?? $currentGame->round_name ?? 'Current Game' }}
                                     </h2>
 
                                     <p class="game-card-sub">
-                                        Round:
+                                        Room:
                                         <span data-live="round_code">
                                             {{ $currentGame->round_code ?? $currentGame->round_number ?? $currentGame->id }}
                                         </span>
@@ -279,15 +315,23 @@
                             </div>
 
                             <div class="game-video-frame">
-                                @if(!empty($currentGame->video_url))
+                                @if($youtubeEmbedUrl)
+                                    <iframe
+                                        class="game-video"
+                                        src="{{ $youtubeEmbedUrl }}"
+                                        title="Game Video"
+                                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                                        allowfullscreen
+                                    ></iframe>
+                                @elseif($videoUrl)
                                     <video class="game-video" controls muted playsinline>
-                                        <source src="{{ $currentGame->video_url }}">
+                                        <source src="{{ $videoUrl }}">
                                     </video>
                                 @else
                                     <div class="game-video game-video-placeholder">
                                         <div>
                                             <div class="game-video-icon">🎥</div>
-                                            <div>No video uploaded for this round</div>
+                                            <div>No video uploaded for this room</div>
                                         </div>
                                     </div>
                                 @endif
@@ -324,28 +368,6 @@
                         </div>
                     </section>
 
-                    <section class="game-total-row">
-                        @foreach($summaryCards as $card)
-                            <div class="game-total-card game-total-{{ $card['theme'] }}">
-                                <div class="game-total-icon">
-                                    {{ $card['icon'] }}
-                                </div>
-
-                                <div>
-                                    <p class="game-total-label">{{ $card['fullLabel'] }}</p>
-
-                                    <h3 class="game-total-value" data-live="{{ $card['totalKey'] }}">
-                                        {{ $card['value'] }}
-                                    </h3>
-
-                                    <p class="game-total-sub" data-live="{{ $card['oddsKey'] }}">
-                                        {{ $card['sub'] }}
-                                    </p>
-                                </div>
-                            </div>
-                        @endforeach
-                    </section>
-
                     <section class="game-card">
                         <div>
                             <h2 class="game-card-title">Place Your Bet</h2>
@@ -354,11 +376,11 @@
                                 @if($isOpen)
                                     Betting is open. Choose your side and enter your amount.
                                 @elseif($isWaiting)
-                                    Game is waiting. Admin has not opened betting yet.
+                                    Game room is waiting. Admin has not opened betting yet.
                                 @elseif($isClosed)
-                                    Betting is already closed for this round.
-                                @elseif($isEnded)
-                                    This round already ended. Please wait for a new game.
+                                    Betting is already closed for this room.
+                                @elseif($isSettled)
+                                    This room is already declared. Please choose another open room.
                                 @endif
                             </p>
                         </div>
@@ -368,9 +390,9 @@
                             id="gameClosedWarning"
                             style="{{ $isOpen ? 'display:none;' : '' }}"
                         >
-                            ⚠ You cannot bet because this game status is
+                            ⚠ You cannot bet because this room status is
                             <strong data-live="game_status_text">{{ strtoupper($currentGame->status) }}</strong>.
-                            Admin must create/start a new game with status <strong>OPEN</strong>.
+                            Choose an <strong>OPEN</strong> room to bet.
                         </div>
 
                         <div class="game-bet-grid">
@@ -441,7 +463,7 @@
                 <aside class="game-right">
                     <section class="game-card">
                         <h2 class="game-card-title">My Latest Bets</h2>
-                        <p class="game-card-sub">Your recent bet records.</p>
+                        <p class="game-card-sub">Your recent bet records for this room.</p>
 
                         <div class="game-bet-history" id="liveLatestBets">
                             @forelse($myBets as $bet)
@@ -477,7 +499,7 @@
                                             </p>
 
                                             <p class="game-history-sub">
-                                                Round: {{ $bet->round?->round_code ?? $bet->game_round_id }}
+                                                Room: {{ $bet->round?->round_code ?? $bet->game_round_id }}
                                                 • Odds {{ number_format($bet->odds_at_bet, 2) }}x
                                             </p>
                                         </div>
@@ -494,119 +516,6 @@
                             @endforelse
                         </div>
                     </section>
-
-                    <section class="game-score-strip">
-                        <div class="game-score-box game-score-meron">
-                            <p>Meron</p>
-                            <h3 data-live="meron_count">{{ $meronCount }}</h3>
-                        </div>
-
-                        <div class="game-score-box game-score-wala">
-                            <p>Wala</p>
-                            <h3 data-live="wala_count">{{ $walaCount }}</h3>
-                        </div>
-
-                        <div class="game-score-box game-score-draw">
-                            <p>Draw</p>
-                            <h3 data-live="draw_count">{{ $drawCount }}</h3>
-                        </div>
-
-                        <div class="game-score-box game-score-cancel">
-                            <p>Cancel</p>
-                            <h3 data-live="cancelled_count">{{ $cancelledCount }}</h3>
-                        </div>
-                    </section>
-
-                    <section class="game-card">
-                        <div class="game-road-head">
-                            <div>
-                                <p class="game-road-kicker">Road</p>
-                                <h2 class="game-road-title">Big Road</h2>
-                            </div>
-
-                            <p class="game-road-note">Pattern by streak</p>
-                        </div>
-
-                        <div class="road-board">
-                            <div class="big-road-inner">
-                                @for($i = 0; $i < 240; $i++)
-                                    @php
-                                        $row = $i % 6;
-                                        $col = floor($i / 6);
-                                        $left = 8 + ($col * 34);
-                                        $top = 8 + ($row * 34);
-                                    @endphp
-
-                                    <div class="road-empty-cell" style="left:{{ $left }}px; top:{{ $top }}px;"></div>
-                                @endfor
-
-                                @forelse($bigRoadPositions as $item)
-                                    @php
-                                        $left = 8 + ($item['col'] * 34);
-                                        $top = 8 + ($item['row'] * 34);
-                                        $entry = $item['entry'];
-                                    @endphp
-
-                                    <div
-                                        class="big-road-dot {{ $item['side'] }}"
-                                        style="left:{{ $left }}px; top:{{ $top }}px;"
-                                        title="{{ strtoupper($item['side']) }} - {{ $entry->round_code ?? $entry->id }}"
-                                    >
-                                        {{ $item['label'] }}
-                                    </div>
-                                @empty
-                                    <div class="game-road-empty">
-                                        No result history yet.
-                                    </div>
-                                @endforelse
-                            </div>
-                        </div>
-                    </section>
-
-                    <section class="game-card">
-                        <div class="game-road-head">
-                            <div>
-                                <p class="game-road-kicker">Road</p>
-                                <h2 class="game-road-title">Bead Road</h2>
-                            </div>
-
-                            <p class="game-road-note">Chronological</p>
-                        </div>
-
-                        <div class="road-board">
-                            <div class="bead-road-inner">
-                                @for($i = 0; $i < 240; $i++)
-                                    @php
-                                        $row = $i % 6;
-                                        $col = floor($i / 6);
-                                        $left = 8 + ($col * 34);
-                                        $top = 8 + ($row * 34);
-                                    @endphp
-
-                                    <div class="road-empty-cell" style="left:{{ $left }}px; top:{{ $top }}px;"></div>
-                                @endfor
-
-                                @foreach($roadEntries as $index => $entry)
-                                    @php
-                                        $side = $normalizeSide($entry);
-                                        $row = $index % 6;
-                                        $col = floor($index / 6);
-                                        $left = 8 + ($col * 34);
-                                        $top = 8 + ($row * 34);
-                                        $number = $index + 1;
-                                    @endphp
-
-                                    <div
-                                        class="bead-road-dot {{ $side }}"
-                                        style="left:{{ $left }}px; top:{{ $top }}px;"
-                                        title="{{ strtoupper($side) }} - {{ $entry->round_code ?? $entry->id }}"
-                                    >
-                                        {{ $number }}
-                                    </div>
-                                @endforeach
-                            </div>
-                        </div>
-                    </section>
                 </aside>
             </section>
         @endif
@@ -614,9 +523,8 @@
 
     <script>
         document.addEventListener('DOMContentLoaded', function () {
-            const liveUrl = @json(route('player.game.live'));
-
-            let latestGameId = @json($currentGame?->id);
+            const selectedRoomId = @json($hasSelectedGame ? $selectedGameId : null);
+            const liveUrl = @json(route('player.game.live')) + (selectedRoomId ? '?game_id=' + encodeURIComponent(selectedRoomId) : '');
 
             const money = (value) => {
                 const number = Number(value || 0);
@@ -629,7 +537,6 @@
 
             const odds = (value) => {
                 const number = Number(value || 0);
-
                 return 'Odds ' + number.toFixed(2) + 'x';
             };
 
@@ -653,8 +560,6 @@
                         return { bg: '#fef3c7', color: '#d97706' };
                     case 'closed':
                         return { bg: '#dbeafe', color: '#2563eb' };
-                    case 'ended':
-                        return { bg: '#fee2e2', color: '#dc2626' };
                     case 'settled':
                         return { bg: '#f3e8ff', color: '#7c3aed' };
                     default:
@@ -693,13 +598,13 @@
                     if (isOpen) {
                         placeBetSubtitle.textContent = 'Betting is open. Choose your side and enter your amount.';
                     } else if (statusKey === 'waiting') {
-                        placeBetSubtitle.textContent = 'Game is waiting. Admin has not opened betting yet.';
+                        placeBetSubtitle.textContent = 'Game room is waiting. Admin has not opened betting yet.';
                     } else if (statusKey === 'closed') {
-                        placeBetSubtitle.textContent = 'Betting is already closed for this round.';
-                    } else if (statusKey === 'ended' || statusKey === 'settled') {
-                        placeBetSubtitle.textContent = 'This round already ended. Please wait for a new game.';
+                        placeBetSubtitle.textContent = 'Betting is already closed for this room.';
+                    } else if (statusKey === 'settled') {
+                        placeBetSubtitle.textContent = 'This room is already declared. Please choose another open room.';
                     } else {
-                        placeBetSubtitle.textContent = 'Please wait for the admin to create or start a game.';
+                        placeBetSubtitle.textContent = 'Please choose an open game room.';
                     }
                 }
             };
@@ -764,7 +669,7 @@
                                     </p>
 
                                     <p class="game-history-sub">
-                                        Round: ${bet.round} • Odds ${Number(bet.odds || 0).toFixed(2)}x
+                                        Room: ${bet.round} • Odds ${Number(bet.odds || 0).toFixed(2)}x
                                     </p>
                                 </div>
                             </div>
@@ -778,6 +683,10 @@
             };
 
             const loadLiveGame = async () => {
+                if (!selectedRoomId) {
+                    return;
+                }
+
                 try {
                     const response = await fetch(liveUrl, {
                         headers: {
@@ -795,15 +704,14 @@
 
                     setAll('wallet_balance', money(data.wallet_balance));
 
+                    if (!data.has_game && selectedRoomId) {
+                        window.location.href = @json(route('player.game.index'));
+                        return;
+                    }
+
                     if (data.has_game && data.game) {
-                        if (latestGameId && Number(latestGameId) !== Number(data.game.id)) {
-                            window.location.reload();
-                            return;
-                        }
-
-                        latestGameId = data.game.id;
-
                         setGameRoundInputs(data.game.id);
+                        setAll('game_title', data.game.title);
                         setAll('round_code', data.game.round_code);
 
                         setAll('meron_total', money(data.game.meron_total));
@@ -819,13 +727,6 @@
                         updateStatusUi(data.game.status);
                     }
 
-                    if (data.road_counts) {
-                        setAll('meron_count', data.road_counts.meron);
-                        setAll('wala_count', data.road_counts.wala);
-                        setAll('draw_count', data.road_counts.draw);
-                        setAll('cancelled_count', data.road_counts.cancelled);
-                    }
-
                     renderLatestBets(data.my_bets);
                 } catch (error) {
                     console.error('Live game update failed:', error);
@@ -833,7 +734,6 @@
             };
 
             loadLiveGame();
-
             setInterval(loadLiveGame, 1000);
         });
     </script>
