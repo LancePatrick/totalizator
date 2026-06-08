@@ -19,17 +19,6 @@
             box-shadow: 0 18px 42px rgba(2,18,54,.18);
         }
 
-        .cr-hero::before {
-            content: "";
-            position: absolute;
-            inset: 0;
-            background:
-                linear-gradient(90deg, rgba(255,255,255,.05) 1px, transparent 1px),
-                linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px);
-            background-size: 54px 54px;
-            opacity: .45;
-        }
-
         .cr-hero::after {
             content: "📊";
             position: absolute;
@@ -74,7 +63,7 @@
 
         .cr-stats {
             display: grid;
-            grid-template-columns: repeat(5, minmax(0, 1fr));
+            grid-template-columns: repeat(4, minmax(0, 1fr));
             gap: 14px;
         }
 
@@ -84,7 +73,6 @@
             border-radius: 20px;
             padding: 18px;
             box-shadow: 0 10px 24px rgba(15,23,42,.045);
-            position: relative;
             transition: .18s ease;
         }
 
@@ -201,7 +189,7 @@
 
         .cr-table {
             width: 100%;
-            min-width: 1080px;
+            min-width: 1200px;
             border-collapse: collapse;
             text-align: left;
             font-size: 14px;
@@ -255,21 +243,11 @@
             white-space: nowrap;
         }
 
-        .cr-green {
-            color: #15803d;
-        }
-
-        .cr-red {
-            color: #dc2626;
-        }
-
-        .cr-blue {
-            color: #2563eb;
-        }
-
-        .cr-orange {
-            color: #b45309;
-        }
+        .cr-green { color: #15803d; }
+        .cr-red { color: #dc2626; }
+        .cr-blue { color: #2563eb; }
+        .cr-orange { color: #b45309; }
+        .cr-purple { color: #7c3aed; }
 
         .cr-pill {
             display: inline-flex;
@@ -300,6 +278,11 @@
             color: #b45309;
         }
 
+        .cr-pill.purple {
+            background: #ede9fe;
+            color: #7c3aed;
+        }
+
         .cr-pill.gray {
             background: #f1f5f9;
             color: #475569;
@@ -311,6 +294,17 @@
             align-items: center;
             gap: 7px;
             cursor: pointer;
+        }
+
+        .cr-info-btn {
+            border: 0;
+            background: transparent;
+            padding: 0;
+            cursor: pointer;
+            color: inherit;
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
         }
 
         .cr-info-icon {
@@ -331,7 +325,7 @@
             position: absolute;
             left: 0;
             top: 28px;
-            z-index: 30;
+            z-index: 50;
             width: 280px;
             background: #0f172a;
             color: white;
@@ -367,15 +361,33 @@
             line-height: 1.55;
         }
 
-        .cr-info-btn {
-            border: 0;
-            background: transparent;
-            padding: 0;
-            cursor: pointer;
-            color: inherit;
-            display: inline-flex;
-            align-items: center;
-            gap: 7px;
+        .cr-help {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 12px;
+        }
+
+        .cr-help-item {
+            border: 1px solid #dce6f2;
+            background: #ffffff;
+            border-radius: 18px;
+            padding: 15px;
+            box-shadow: 0 10px 24px rgba(15,23,42,.035);
+        }
+
+        .cr-help-title {
+            margin: 0;
+            color: #0f172a;
+            font-size: 14px;
+            font-weight: 950;
+        }
+
+        .cr-help-text {
+            margin: 7px 0 0;
+            color: #64748b;
+            font-size: 12px;
+            font-weight: 700;
+            line-height: 1.5;
         }
 
         .cr-details {
@@ -383,6 +395,7 @@
             border-radius: 16px;
             background: #f8fbff;
             overflow: hidden;
+            min-width: 300px;
         }
 
         .cr-details summary {
@@ -464,35 +477,6 @@
             font-weight: 850;
         }
 
-        .cr-help {
-            display: grid;
-            grid-template-columns: repeat(4, minmax(0, 1fr));
-            gap: 12px;
-        }
-
-        .cr-help-item {
-            border: 1px solid #dce6f2;
-            background: #ffffff;
-            border-radius: 18px;
-            padding: 15px;
-            box-shadow: 0 10px 24px rgba(15,23,42,.035);
-        }
-
-        .cr-help-title {
-            margin: 0;
-            color: #0f172a;
-            font-size: 14px;
-            font-weight: 950;
-        }
-
-        .cr-help-text {
-            margin: 7px 0 0;
-            color: #64748b;
-            font-size: 12px;
-            font-weight: 700;
-            line-height: 1.5;
-        }
-
         @media (max-width: 1200px) {
             .cr-stats {
                 grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -544,7 +528,7 @@
                 </h1>
 
                 <p class="cr-subtitle">
-                    Monitor agent commission earnings, current commission balances, converted load, cashout requests, and latest commission activity.
+                    Monitor agent commission earnings, current balances, commission converted to load, and commission cash withdrawal requests.
                 </p>
             </div>
         </section>
@@ -552,32 +536,44 @@
         <section class="cr-stats">
             <div class="cr-stat">
                 <p class="cr-stat-label">Commission Earned</p>
-                <p class="cr-stat-value">₱{{ number_format($totalCommissionEarned ?? 0, 2) }}</p>
+                <p class="cr-stat-value cr-blue">₱{{ number_format($totalCommissionEarned ?? 0, 2) }}</p>
                 <p class="cr-stat-note">Total 2% commission credited from player bets.</p>
             </div>
 
             <div class="cr-stat">
+                <p class="cr-stat-label">Current Commission Balance</p>
+                <p class="cr-stat-value cr-green">₱{{ number_format($totalCommissionBalance ?? 0, 2) }}</p>
+                <p class="cr-stat-note">Available commission remaining across all agents.</p>
+            </div>
+
+            <div class="cr-stat">
                 <p class="cr-stat-label">Converted to Load</p>
-                <p class="cr-stat-value">₱{{ number_format($totalConvertedToLoad ?? 0, 2) }}</p>
-                <p class="cr-stat-note">Commission moved to agent load wallet.</p>
+                <p class="cr-stat-value cr-purple">₱{{ number_format($totalConvertedToLoad ?? 0, 2) }}</p>
+                <p class="cr-stat-note">Commission converted to agent load wallet.</p>
             </div>
 
             <div class="cr-stat">
                 <p class="cr-stat-label">Cashout Requested</p>
-                <p class="cr-stat-value">₱{{ number_format($totalCashoutRequested ?? 0, 2) }}</p>
-                <p class="cr-stat-note">Total commission cashout requested by agents.</p>
+                <p class="cr-stat-value cr-red">₱{{ number_format($totalCashoutRequested ?? 0, 2) }}</p>
+                <p class="cr-stat-note">Total commission requested as cash.</p>
             </div>
 
             <div class="cr-stat">
                 <p class="cr-stat-label">Pending Cashout</p>
-                <p class="cr-stat-value">₱{{ number_format($totalPendingCashout ?? 0, 2) }}</p>
-                <p class="cr-stat-note">Cashouts waiting for admin approval.</p>
+                <p class="cr-stat-value cr-orange">₱{{ number_format($totalPendingCashout ?? 0, 2) }}</p>
+                <p class="cr-stat-note">Cashout requests waiting for admin approval.</p>
             </div>
 
             <div class="cr-stat">
                 <p class="cr-stat-label">Approved Cashout</p>
-                <p class="cr-stat-value">₱{{ number_format($totalApprovedCashout ?? 0, 2) }}</p>
-                <p class="cr-stat-note">Commission cashouts already approved.</p>
+                <p class="cr-stat-value cr-green">₱{{ number_format($totalApprovedCashout ?? 0, 2) }}</p>
+                <p class="cr-stat-note">Commission cashout already approved.</p>
+            </div>
+
+            <div class="cr-stat">
+                <p class="cr-stat-label">Rejected Cashout</p>
+                <p class="cr-stat-value cr-red">₱{{ number_format($totalRejectedCashout ?? 0, 2) }}</p>
+                <p class="cr-stat-note">Rejected cashouts returned to commission balance.</p>
             </div>
         </section>
 
@@ -597,16 +593,16 @@
             </div>
 
             <div class="cr-help-item">
-                <p class="cr-help-title">Pending Cashout</p>
+                <p class="cr-help-title">Cashout Requested</p>
                 <p class="cr-help-text">
-                    Amount already deducted from commission balance while waiting for admin review.
+                    Amount deducted from commission balance and sent to admin for cash withdrawal approval.
                 </p>
             </div>
 
             <div class="cr-help-item">
                 <p class="cr-help-title">Rejected Cashout</p>
                 <p class="cr-help-text">
-                    If rejected, the commission amount should return back to agent commission balance.
+                    If rejected, the commission amount returns back to the agent commission balance.
                 </p>
             </div>
         </section>
@@ -616,7 +612,7 @@
                 <div>
                     <h2 class="cr-card-title">Agent Commission Summary</h2>
                     <p class="cr-card-sub">
-                        Hover the info icon beside each amount or click “View Details” to see a cleaner breakdown per agent.
+                        Shows each agent’s commission balance, converted load amount, cashout amount, and latest records.
                     </p>
                 </div>
             </div>
@@ -659,9 +655,10 @@
                         <tr>
                             <th>Agent</th>
                             <th>Commission Balance</th>
-                            <th>Earned</th>
-                            <th>Converted</th>
-                            <th>Cashout Status</th>
+                            <th>Commission Earned</th>
+                            <th>Converted to Load</th>
+                            <th>Cash Withdrawal</th>
+                            <th>Status Breakdown</th>
                             <th>Details</th>
                         </tr>
                     </thead>
@@ -678,7 +675,6 @@
                                 $approvedCashout = (float) ($agent->approved_commission_withdrawals ?? 0);
                                 $rejectedCashout = (float) ($agent->rejected_commission_withdrawals ?? 0);
                                 $totalUsed = $converted + $cashoutRequested;
-                                $availableAfterPending = $commissionBalance;
                             @endphp
 
                             <tr>
@@ -701,10 +697,10 @@
                                         <div class="cr-popover">
                                             <p class="cr-popover-title">Current Commission Balance</p>
                                             <p class="cr-popover-text">
-                                                This is the agent's available commission. Agent can convert this to load or request cashout.
+                                                This is the available commission of the agent.
                                             </p>
                                             <p class="cr-popover-text">
-                                                Pending cashout is already deducted from this balance.
+                                                Agent can convert this to load or request commission cashout.
                                             </p>
                                         </div>
                                     </div>
@@ -722,10 +718,7 @@
                                         <div class="cr-popover">
                                             <p class="cr-popover-title">Commission Earned</p>
                                             <p class="cr-popover-text">
-                                                Total 2% commission earned from players' bets under this agent.
-                                            </p>
-                                            <p class="cr-popover-text">
-                                                This is based on commission transaction records.
+                                                Total 2% commission earned from player bets under this agent.
                                             </p>
                                         </div>
                                     </div>
@@ -734,7 +727,7 @@
                                 <td>
                                     <div class="cr-info">
                                         <button type="button" class="cr-info-btn">
-                                            <p class="cr-amount cr-orange">
+                                            <p class="cr-amount cr-purple">
                                                 ₱{{ number_format($converted, 2) }}
                                             </p>
                                             <span class="cr-info-icon">i</span>
@@ -743,10 +736,31 @@
                                         <div class="cr-popover">
                                             <p class="cr-popover-title">Converted to Load</p>
                                             <p class="cr-popover-text">
-                                                Commission converted into agent's normal load wallet.
+                                                Commission converted into the agent's normal load wallet.
                                             </p>
                                             <p class="cr-popover-text">
                                                 This increases wallet balance and decreases commission balance.
+                                            </p>
+                                        </div>
+                                    </div>
+                                </td>
+
+                                <td>
+                                    <div class="cr-info">
+                                        <button type="button" class="cr-info-btn">
+                                            <p class="cr-amount cr-red">
+                                                ₱{{ number_format($cashoutRequested, 2) }}
+                                            </p>
+                                            <span class="cr-info-icon">i</span>
+                                        </button>
+
+                                        <div class="cr-popover">
+                                            <p class="cr-popover-title">Cash Withdrawal Request</p>
+                                            <p class="cr-popover-text">
+                                                Commission requested by agent as cash withdrawal.
+                                            </p>
+                                            <p class="cr-popover-text">
+                                                This is deducted from commission balance while pending.
                                             </p>
                                         </div>
                                     </div>
@@ -822,16 +836,24 @@
                                             </div>
 
                                             <p class="cr-name" style="margin-bottom:10px;">
-                                                Latest Commission Records
+                                                Latest Commission Transactions
                                             </p>
 
                                             @forelse($agent->latest_commission_transactions as $transaction)
-                                                <div class="cr-record">
-                                                    @php
-                                                        $direction = strtolower($transaction->direction ?? 'default');
-                                                        $pillClass = $direction === 'credit' ? 'green' : ($direction === 'debit' ? 'red' : 'gray');
-                                                    @endphp
+                                                @php
+                                                    $direction = strtolower($transaction->direction ?? 'default');
+                                                    $pillClass = $direction === 'credit' ? 'green' : ($direction === 'debit' ? 'red' : 'gray');
 
+                                                    if ($transaction->type === 'convert_to_load') {
+                                                        $pillClass = 'purple';
+                                                    }
+
+                                                    if ($transaction->type === 'commission_withdrawal_request') {
+                                                        $pillClass = 'red';
+                                                    }
+                                                @endphp
+
+                                                <div class="cr-record">
                                                     <span class="cr-pill {{ $pillClass }}">
                                                         {{ strtoupper(str_replace('_', ' ', $transaction->type)) }}
                                                     </span>
@@ -861,13 +883,62 @@
                                                     No commission transaction records yet.
                                                 </p>
                                             @endforelse
+
+                                            <p class="cr-name" style="margin:16px 0 10px;">
+                                                Latest Cashout Requests
+                                            </p>
+
+                                            @forelse($agent->latest_commission_withdrawals as $withdrawal)
+                                                @php
+                                                    $status = strtolower($withdrawal->status ?? 'pending');
+
+                                                    $statusClass = match ($status) {
+                                                        'approved' => 'green',
+                                                        'rejected' => 'red',
+                                                        'pending' => 'orange',
+                                                        default => 'gray',
+                                                    };
+                                                @endphp
+
+                                                <div class="cr-record">
+                                                    <span class="cr-pill {{ $statusClass }}">
+                                                        {{ strtoupper($withdrawal->status) }}
+                                                    </span>
+
+                                                    <p class="cr-muted">
+                                                        Amount: ₱{{ number_format($withdrawal->amount, 2) }}
+                                                    </p>
+
+                                                    <p class="cr-muted">
+                                                        Method: {{ $withdrawal->payment_method }}
+                                                    </p>
+
+                                                    <p class="cr-muted">
+                                                        Account: {{ $withdrawal->account_name }} / {{ $withdrawal->account_number }}
+                                                    </p>
+
+                                                    <p class="cr-muted">
+                                                        Requested: {{ $withdrawal->created_at?->format('M d, Y h:i A') }}
+                                                    </p>
+
+                                                    @if($withdrawal->reviewed_at)
+                                                        <p class="cr-muted">
+                                                            Reviewed: {{ $withdrawal->reviewed_at?->format('M d, Y h:i A') }}
+                                                        </p>
+                                                    @endif
+                                                </div>
+                                            @empty
+                                                <p class="cr-muted">
+                                                    No cashout request records yet.
+                                                </p>
+                                            @endforelse
                                         </div>
                                     </details>
                                 </td>
                             </tr>
                         @empty
                             <tr>
-                                <td colspan="6">
+                                <td colspan="7">
                                     <div class="cr-empty">
                                         No agent commission records found.
                                     </div>

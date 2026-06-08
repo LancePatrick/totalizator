@@ -70,6 +70,11 @@ class AdminCommissionReportController extends Controller
 
             $agent->latest_commission_transactions = CommissionTransaction::where('agent_id', $agent->id)
                 ->latest()
+                ->take(8)
+                ->get();
+
+            $agent->latest_commission_withdrawals = CommissionWithdrawalRequest::where('agent_id', $agent->id)
+                ->latest()
                 ->take(5)
                 ->get();
 
@@ -89,33 +94,47 @@ class AdminCommissionReportController extends Controller
             $summaryWithdrawalsQuery->whereDate('created_at', '<=', $request->date_to);
         }
 
+        $totalCommissionEarned = (clone $summaryTransactionsQuery)
+            ->where('type', 'player_bet_commission')
+            ->where('direction', 'credit')
+            ->sum('amount');
+
+        $totalConvertedToLoad = (clone $summaryTransactionsQuery)
+            ->where('type', 'convert_to_load')
+            ->where('direction', 'debit')
+            ->sum('amount');
+
+        $totalCashoutRequested = (clone $summaryTransactionsQuery)
+            ->where('type', 'commission_withdrawal_request')
+            ->where('direction', 'debit')
+            ->sum('amount');
+
+        $totalPendingCashout = (clone $summaryWithdrawalsQuery)
+            ->where('status', 'pending')
+            ->sum('amount');
+
+        $totalApprovedCashout = (clone $summaryWithdrawalsQuery)
+            ->where('status', 'approved')
+            ->sum('amount');
+
+        $totalRejectedCashout = (clone $summaryWithdrawalsQuery)
+            ->where('status', 'rejected')
+            ->sum('amount');
+
+        $totalCommissionBalance = User::where('role', 'agent')->sum('commission_balance');
+
         return view('admin.commission-reports.index', [
             'agents' => $agents,
             'dateFrom' => $request->date_from,
             'dateTo' => $request->date_to,
 
-            'totalCommissionEarned' => (clone $summaryTransactionsQuery)
-                ->where('type', 'player_bet_commission')
-                ->where('direction', 'credit')
-                ->sum('amount'),
-
-            'totalConvertedToLoad' => (clone $summaryTransactionsQuery)
-                ->where('type', 'convert_to_load')
-                ->where('direction', 'debit')
-                ->sum('amount'),
-
-            'totalCashoutRequested' => (clone $summaryTransactionsQuery)
-                ->where('type', 'commission_withdrawal_request')
-                ->where('direction', 'debit')
-                ->sum('amount'),
-
-            'totalPendingCashout' => (clone $summaryWithdrawalsQuery)
-                ->where('status', 'pending')
-                ->sum('amount'),
-
-            'totalApprovedCashout' => (clone $summaryWithdrawalsQuery)
-                ->where('status', 'approved')
-                ->sum('amount'),
+            'totalCommissionEarned' => $totalCommissionEarned,
+            'totalConvertedToLoad' => $totalConvertedToLoad,
+            'totalCashoutRequested' => $totalCashoutRequested,
+            'totalPendingCashout' => $totalPendingCashout,
+            'totalApprovedCashout' => $totalApprovedCashout,
+            'totalRejectedCashout' => $totalRejectedCashout,
+            'totalCommissionBalance' => $totalCommissionBalance,
         ]);
     }
 }

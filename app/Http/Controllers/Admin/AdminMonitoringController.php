@@ -42,40 +42,89 @@ class AdminMonitoringController extends Controller
 
         $totalDrawWin = $this->drawWinAmount($dateFrom, $dateTo);
 
+        /*
+        |--------------------------------------------------------------------------
+        | Commission Computation
+        |--------------------------------------------------------------------------
+        | Total commission = 5%
+        | Company commission = 3%
+        | Agent commission = 2%
+        |--------------------------------------------------------------------------
+        */
+
         $totalCommission = (float) (clone $games)->sum('commission_amount');
 
         if ($totalCommission <= 0) {
             $totalCommission = round($totalBets * 0.05, 2);
         }
 
-        $companyCommission = round($totalBets * 0.03, 2);
-        $agentCommission = round($totalBets * 0.02, 2);
+        $companyCommission = (float) (clone $games)->sum('company_commission_amount');
+
+        if ($companyCommission <= 0) {
+            $companyCommission = round($totalBets * 0.03, 2);
+        }
+
+        $agentCommission = (float) (clone $games)->sum('agent_commission_amount');
+
+        if ($agentCommission <= 0) {
+            $agentCommission = round($totalBets * 0.02, 2);
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Commission Converted To Load
+        |--------------------------------------------------------------------------
+        | Agent commission converted to normal load wallet.
+        | Usually this is CREDIT to wallet_transactions.
+        |--------------------------------------------------------------------------
+        */
 
         $totalConvertCommission = (float) (clone $walletTransactions)
             ->whereIn('type', [
                 'commission_convert',
+                'commission_converted',
                 'agent_commission_convert',
+                'agent_commission_converted',
                 'convert_commission',
-                'commission_cashout',
+                'converted_commission',
+                'commission_to_load',
             ])
             ->where('direction', 'credit')
             ->sum('amount');
+
+        /*
+        |--------------------------------------------------------------------------
+        | Commission Cashout / Commission Withdrawal
+        |--------------------------------------------------------------------------
+        | Usually this is DEBIT from commission balance.
+        |--------------------------------------------------------------------------
+        */
 
         $totalCommissionCashOut = (float) (clone $walletTransactions)
             ->whereIn('type', [
                 'commission_cashout',
                 'agent_commission_cashout',
                 'cashout_commission',
+                'commission_withdrawal',
+                'agent_commission_withdrawal',
             ])
             ->where('direction', 'debit')
             ->sum('amount');
 
-        $initialWalletColumn = Schema::hasColumn('users', 'initial_wallet_balance')
-            ? 'initial_wallet_balance'
-            : 'wallet_balance';
+        /*
+        |--------------------------------------------------------------------------
+        | Initial Wallet
+        |--------------------------------------------------------------------------
+        | If date_from is selected, this computes wallet at the start of that day.
+        | Formula:
+        | current wallet - transactions from selected day until now.
+        |
+        | If no date_from, it uses initial_wallet_balance if column exists.
+        |--------------------------------------------------------------------------
+        */
 
-        $initialWallet = (float) User::query()->sum($initialWalletColumn);
         $actualWallet = (float) User::query()->sum('wallet_balance');
+        $initialWallet = $this->initialWalletAmount($dateFrom);
 
         $totalPayout = (float) (clone $walletTransactions)
             ->whereIn('type', ['payout', 'refund'])
@@ -83,7 +132,12 @@ class AdminMonitoringController extends Controller
             ->sum('amount');
 
         $mustTotalWallet = round(
-            $initialWallet + $totalLoading - $totalWithdrawal - $totalBets + $totalPayout + $totalConvertCommission,
+            $initialWallet
+            + $totalLoading
+            - $totalWithdrawal
+            - $totalBets
+            + $totalPayout
+            + $totalConvertCommission,
             2
         );
 
@@ -105,8 +159,14 @@ class AdminMonitoringController extends Controller
             [
                 'label' => 'Total Convert Commission',
                 'value' => $totalConvertCommission,
-                'sub' => 'Commission converted',
+                'sub' => 'Commission converted to load',
                 'tone' => 'purple',
+            ],
+            [
+                'label' => 'Commission Cashout',
+                'value' => $totalCommissionCashOut,
+                'sub' => 'Commission withdrawn as cash',
+                'tone' => 'red',
             ],
             [
                 'label' => 'Total Bets',
@@ -159,7 +219,7 @@ class AdminMonitoringController extends Controller
             [
                 'label' => 'Initial Wallet',
                 'value' => $initialWallet,
-                'sub' => 'Starting wallet balance',
+                'sub' => $dateFrom ? 'Wallet at start of selected day' : 'Starting wallet balance',
                 'tone' => 'white',
             ],
             [
@@ -341,6 +401,7 @@ class AdminMonitoringController extends Controller
                 'Agent Code',
                 'Players',
                 'Wallet Balance',
+                'Commission Balance',
                 'Total Player Bets',
                 'Agent Commission 2%',
                 'Status',
@@ -353,6 +414,7 @@ class AdminMonitoringController extends Controller
                     $agent->agent_code,
                     $agent->total_players_count,
                     $agent->wallet_balance,
+                    $agent->commission_balance ?? 0,
                     $agent->total_player_bets,
                     $agent->computed_agent_commission,
                     $agent->is_active ? 'Active' : 'Inactive',
@@ -393,6 +455,16 @@ class AdminMonitoringController extends Controller
                 $totalPlayerBets = (float) $betsQuery->sum('amount');
 
                 $agent->total_player_bets = $totalPlayerBets;
+
+                /*
+                |--------------------------------------------------------------------------
+                | Display Computed Agent Commission
+                |--------------------------------------------------------------------------
+                | If actual commission_balance exists and has value, we still show computed 2%.
+                | The actual balance is shown in views as commission_balance.
+                |--------------------------------------------------------------------------
+                */
+
                 $agent->computed_agent_commission = round($totalPlayerBets * 0.02, 2);
 
                 return $agent;
@@ -408,18 +480,36 @@ class AdminMonitoringController extends Controller
             ->groupBy(fn ($game) => optional($game->created_at)->format('Y-m-d') ?? 'No Date')
             ->map(function ($items, $date) {
                 $totalPool = $items->sum(fn ($game) => (float) ($game->total_pool ?? 0));
+                $totalBets = $items->sum(function ($game) {
+                    return (float) ($game->meron_total ?? 0)
+                        + (float) ($game->wala_total ?? 0)
+                        + (float) ($game->draw_total ?? 0);
+                });
+
                 $commission = $items->sum(fn ($game) => (float) ($game->commission_amount ?? 0));
 
                 if ($commission <= 0) {
-                    $commission = round($totalPool * 0.05, 2);
+                    $commission = round($totalBets * 0.05, 2);
+                }
+
+                $companyCommission = $items->sum(fn ($game) => (float) ($game->company_commission_amount ?? 0));
+
+                if ($companyCommission <= 0) {
+                    $companyCommission = round($totalBets * 0.03, 2);
+                }
+
+                $agentCommission = $items->sum(fn ($game) => (float) ($game->agent_commission_amount ?? 0));
+
+                if ($agentCommission <= 0) {
+                    $agentCommission = round($totalBets * 0.02, 2);
                 }
 
                 return [
                     'date' => $date,
                     'games' => $items->count(),
                     'total_pool' => $totalPool,
-                    'company_commission' => round($totalPool * 0.03, 2),
-                    'agent_commission' => round($totalPool * 0.02, 2),
+                    'company_commission' => $companyCommission,
+                    'agent_commission' => $agentCommission,
                     'total_commission' => $commission,
                     'net_pool' => $items->sum(fn ($game) => (float) ($game->net_pool ?? 0)),
                     'payout_total' => $items->sum(fn ($game) => (float) ($game->payout_total ?? 0)),
@@ -456,6 +546,56 @@ class AdminMonitoringController extends Controller
         }
 
         return (float) $query->sum('amount');
+    }
+
+    private function initialWalletAmount(?string $dateFrom): float
+    {
+        /*
+        |--------------------------------------------------------------------------
+        | No Date Filter
+        |--------------------------------------------------------------------------
+        | Use initial_wallet_balance column if available.
+        |--------------------------------------------------------------------------
+        */
+
+        if (!$dateFrom) {
+            if (Schema::hasColumn('users', 'initial_wallet_balance')) {
+                return (float) User::query()->sum('initial_wallet_balance');
+            }
+
+            return (float) User::query()->sum('wallet_balance');
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | With Date Filter
+        |--------------------------------------------------------------------------
+        | Wallet at start of date_from:
+        | current balance - all wallet movement from date_from 00:00:00 until now.
+        |--------------------------------------------------------------------------
+        */
+
+        $actualWallet = (float) User::query()->sum('wallet_balance');
+
+        $transactionsFromDate = WalletTransaction::query()
+            ->whereDate('created_at', '>=', $dateFrom)
+            ->get();
+
+        $netMovement = $transactionsFromDate->sum(function ($transaction) {
+            $amount = (float) $transaction->amount;
+
+            if ($transaction->direction === 'credit') {
+                return $amount;
+            }
+
+            if ($transaction->direction === 'debit') {
+                return -$amount;
+            }
+
+            return 0;
+        });
+
+        return round($actualWallet - $netMovement, 2);
     }
 
     private function dateFilter($query, ?string $dateFrom, ?string $dateTo)

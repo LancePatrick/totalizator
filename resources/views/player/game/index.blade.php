@@ -7,7 +7,7 @@
         $isOpen = $currentGame && $currentGame->status === 'open';
         $isWaiting = $currentGame && $currentGame->status === 'waiting';
         $isClosed = $currentGame && $currentGame->status === 'closed';
-        $isEnded = $currentGame && $currentGame->status === 'ended';
+        $isEnded = $currentGame && in_array($currentGame->status, ['ended', 'settled']);
 
         $meronTotal = (float) ($currentGame->meron_total ?? 0);
         $walaTotal = (float) ($currentGame->wala_total ?? 0);
@@ -24,6 +24,7 @@
             'waiting' => '#d97706',
             'closed' => '#2563eb',
             'ended' => '#dc2626',
+            'settled' => '#7c3aed',
             default => '#64748b',
         };
 
@@ -32,683 +33,211 @@
             'waiting' => '#fef3c7',
             'closed' => '#dbeafe',
             'ended' => '#fee2e2',
+            'settled' => '#f3e8ff',
             default => '#f1f5f9',
         };
 
-        $roadEntries = collect($logrohan ?? [])->take(240)->values();
+        $roadEntries = collect($logrohan ?? [])
+            ->take(240)
+            ->reverse()
+            ->values();
 
-        $meronCount = $roadEntries->filter(function ($entry) {
-            return strtolower($entry->winning_side ?? $entry->result ?? '') === 'meron';
-        })->count();
+        $normalizeSide = function ($entry) {
+            $side = strtolower($entry->winning_side ?? $entry->result ?? $entry->side ?? 'cancelled');
 
-        $walaCount = $roadEntries->filter(function ($entry) {
-            return strtolower($entry->winning_side ?? $entry->result ?? '') === 'wala';
-        })->count();
+            if ($side === 'canceled' || $side === 'cancel') {
+                $side = 'cancelled';
+            }
 
-        $drawCount = $roadEntries->filter(function ($entry) {
-            return strtolower($entry->winning_side ?? $entry->result ?? '') === 'draw';
-        })->count();
+            if (!in_array($side, ['meron', 'wala', 'draw', 'cancelled'])) {
+                $side = 'cancelled';
+            }
 
-        $cancelledCount = $roadEntries->filter(function ($entry) {
-            $side = strtolower($entry->winning_side ?? $entry->result ?? '');
-            return in_array($side, ['cancelled', 'canceled', 'cancel']);
-        })->count();
+            return $side;
+        };
+
+        $sideLabel = function ($side) {
+            return match ($side) {
+                'meron' => 'M',
+                'wala' => 'W',
+                'draw' => 'D',
+                default => 'C',
+            };
+        };
+
+        $meronCount = $roadEntries->filter(fn ($entry) => $normalizeSide($entry) === 'meron')->count();
+        $walaCount = $roadEntries->filter(fn ($entry) => $normalizeSide($entry) === 'wala')->count();
+        $drawCount = $roadEntries->filter(fn ($entry) => $normalizeSide($entry) === 'draw')->count();
+        $cancelledCount = $roadEntries->filter(fn ($entry) => $normalizeSide($entry) === 'cancelled')->count();
+
+        $summaryCards = [
+            [
+                'key' => 'meron',
+                'label' => 'Meron',
+                'fullLabel' => 'Meron Total',
+                'value' => '₱' . number_format($meronTotal, 2),
+                'sub' => 'Odds ' . number_format($meronOdds, 2) . 'x',
+                'icon' => 'M',
+                'theme' => 'red',
+                'totalKey' => 'meron_total',
+                'oddsKey' => 'meron_odds',
+            ],
+            [
+                'key' => 'wala',
+                'label' => 'Wala',
+                'fullLabel' => 'Wala Total',
+                'value' => '₱' . number_format($walaTotal, 2),
+                'sub' => 'Odds ' . number_format($walaOdds, 2) . 'x',
+                'icon' => 'W',
+                'theme' => 'blue',
+                'totalKey' => 'wala_total',
+                'oddsKey' => 'wala_odds',
+            ],
+            [
+                'key' => 'draw',
+                'label' => 'Draw',
+                'fullLabel' => 'Draw Total',
+                'value' => '₱' . number_format($drawTotal, 2),
+                'sub' => 'Odds ' . number_format($drawOdds, 2) . 'x',
+                'icon' => 'D',
+                'theme' => 'purple',
+                'totalKey' => 'draw_total',
+                'oddsKey' => 'draw_odds',
+            ],
+            [
+                'key' => 'pool',
+                'label' => 'Pool',
+                'fullLabel' => 'Total Pool',
+                'value' => '₱' . number_format($totalPool, 2),
+                'sub' => 'Net ₱' . number_format($netPool, 2),
+                'icon' => '₱',
+                'theme' => 'green',
+                'totalKey' => 'total_pool',
+                'oddsKey' => 'net_pool',
+            ],
+        ];
+
+        $betCards = [
+            [
+                'side' => 'meron',
+                'title' => 'MERON',
+                'letter' => 'M',
+                'total' => $meronTotal,
+                'odds' => $meronOdds,
+                'theme' => 'orange',
+                'button' => 'Bet Meron',
+                'totalKey' => 'meron_total',
+                'oddsKey' => 'meron_odds',
+            ],
+            [
+                'side' => 'wala',
+                'title' => 'WALA',
+                'letter' => 'W',
+                'total' => $walaTotal,
+                'odds' => $walaOdds,
+                'theme' => 'blue',
+                'button' => 'Bet Wala',
+                'totalKey' => 'wala_total',
+                'oddsKey' => 'wala_odds',
+            ],
+            [
+                'side' => 'draw',
+                'title' => 'DRAW',
+                'letter' => 'D',
+                'total' => $drawTotal,
+                'odds' => $drawOdds,
+                'theme' => 'purple',
+                'button' => 'Bet Draw',
+                'totalKey' => 'draw_total',
+                'oddsKey' => 'draw_odds',
+            ],
+        ];
+
+        $bigRoadPositions = [];
+        $occupied = [];
+        $lastSide = null;
+        $currentCol = -1;
+        $currentRow = 0;
+
+        foreach ($roadEntries as $index => $entry) {
+            $side = $normalizeSide($entry);
+
+            if ($side !== $lastSide) {
+                $currentCol++;
+                $currentRow = 0;
+                $lastSide = $side;
+
+                while (isset($occupied[$currentCol . '-0'])) {
+                    $currentCol++;
+                }
+            } else {
+                $nextRow = $currentRow + 1;
+
+                if ($nextRow <= 5 && !isset($occupied[$currentCol . '-' . $nextRow])) {
+                    $currentRow = $nextRow;
+                } else {
+                    $currentCol++;
+
+                    while (isset($occupied[$currentCol . '-' . $currentRow])) {
+                        $currentCol++;
+                    }
+                }
+            }
+
+            $occupied[$currentCol . '-' . $currentRow] = true;
+
+            $bigRoadPositions[] = [
+                'entry' => $entry,
+                'side' => $side,
+                'label' => $sideLabel($side),
+                'row' => $currentRow,
+                'col' => $currentCol,
+                'index' => $index,
+            ];
+        }
     @endphp
 
-    <style>
-        .tg-page {
-            display: flex;
-            flex-direction: column;
-            gap: 18px;
-        }
-
-        .tg-hero {
-            position: relative;
-            overflow: hidden;
-            border-radius: 22px;
-            padding: 26px;
-            color: white;
-            background:
-                radial-gradient(circle at 82% 45%, rgba(29,124,255,.65), transparent 26%),
-                radial-gradient(circle at 18% 20%, rgba(250,204,21,.16), transparent 22%),
-                linear-gradient(135deg, #03142f 0%, #041a4d 52%, #0848b9 100%);
-            box-shadow: 0 18px 42px rgba(2,18,54,.18);
-        }
-
-        .tg-hero::before {
-            content: "";
-            position: absolute;
-            inset: 0;
-            background:
-                linear-gradient(90deg, rgba(255,255,255,.05) 1px, transparent 1px),
-                linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px);
-            background-size: 54px 54px;
-            opacity: .45;
-        }
-
-        .tg-hero-inner {
-            position: relative;
-            z-index: 2;
-            display: flex;
-            justify-content: space-between;
-            gap: 24px;
-            align-items: center;
-        }
-
-        .tg-kicker {
-            margin: 0;
-            color: #38bdf8;
-            font-size: 12px;
-            font-weight: 900;
-            text-transform: uppercase;
-            letter-spacing: .18em;
-        }
-
-        .tg-title {
-            margin: 8px 0 0;
-            font-size: 32px;
-            font-weight: 950;
-            letter-spacing: -.04em;
-        }
-
-        .tg-subtitle {
-            margin: 10px 0 0;
-            color: rgba(255,255,255,.74);
-            font-size: 14px;
-            font-weight: 700;
-        }
-
-        .tg-wallet-box {
-            min-width: 240px;
-            border-radius: 18px;
-            background: rgba(255,255,255,.08);
-            border: 1px solid rgba(255,255,255,.15);
-            padding: 18px;
-            backdrop-filter: blur(10px);
-        }
-
-        .tg-wallet-label {
-            margin: 0;
-            color: rgba(255,255,255,.65);
-            font-size: 12px;
-            font-weight: 900;
-            text-transform: uppercase;
-            letter-spacing: .12em;
-        }
-
-        .tg-wallet-value {
-            margin: 8px 0 0;
-            color: #facc15;
-            font-size: 30px;
-            font-weight: 950;
-        }
-
-        .tg-alert {
-            border-radius: 16px;
-            padding: 14px 16px;
-            font-size: 14px;
-            font-weight: 800;
-        }
-
-        .tg-alert-success {
-            background: #dcfce7;
-            color: #166534;
-            border: 1px solid #bbf7d0;
-        }
-
-        .tg-alert-error {
-            background: #fee2e2;
-            color: #991b1b;
-            border: 1px solid #fecaca;
-        }
-
-        .tg-main-grid {
-            display: grid;
-            grid-template-columns: minmax(0, 1fr) 380px;
-            gap: 18px;
-            align-items: start;
-        }
-
-        .tg-card {
-            background: white;
-            border: 1px solid #dce6f2;
-            border-radius: 20px;
-            padding: 18px;
-            box-shadow: 0 10px 24px rgba(15,23,42,.045);
-        }
-
-        .tg-video-card {
-            overflow: hidden;
-            padding: 0;
-        }
-
-        .tg-video-head {
-            padding: 18px;
-            display: flex;
-            justify-content: space-between;
-            align-items: start;
-            gap: 14px;
-            border-bottom: 1px solid #e7edf6;
-        }
-
-        .tg-game-name {
-            margin: 0;
-            color: #0f172a;
-            font-size: 22px;
-            font-weight: 950;
-        }
-
-        .tg-round {
-            margin: 5px 0 0;
-            color: #64748b;
-            font-size: 13px;
-            font-weight: 800;
-        }
-
-        .tg-status {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            border-radius: 999px;
-            padding: 7px 12px;
-            font-size: 12px;
-            font-weight: 950;
-            text-transform: uppercase;
-        }
-
-        .tg-video-wrap {
-            background: #111827;
-            padding: 18px;
-        }
-
-        .tg-video {
-            width: 100%;
-            height: 360px;
-            background: #000;
-            border-radius: 14px;
-            display: block;
-        }
-
-        .tg-no-video {
-            height: 360px;
-            border-radius: 14px;
-            background:
-                radial-gradient(circle at 50% 50%, rgba(29,124,255,.18), transparent 26%),
-                linear-gradient(135deg, #020617, #111827);
-            color: white;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            text-align: center;
-            font-weight: 900;
-        }
-
-        .tg-section-title {
-            margin: 0;
-            color: #0f172a;
-            font-size: 20px;
-            font-weight: 950;
-        }
-
-        .tg-section-sub {
-            margin: 6px 0 0;
-            color: #64748b;
-            font-size: 13px;
-            font-weight: 700;
-        }
-
-        .tg-total-grid {
-            display: grid;
-            grid-template-columns: repeat(4, minmax(0, 1fr));
-            gap: 12px;
-        }
-
-        .tg-total-box {
-            border-radius: 18px;
-            padding: 16px;
-            border: 1px solid #e7edf6;
-            background: #f8fbff;
-        }
-
-        .tg-total-label {
-            margin: 0;
-            color: #64748b;
-            font-size: 12px;
-            font-weight: 900;
-            text-transform: uppercase;
-            letter-spacing: .08em;
-        }
-
-        .tg-total-value {
-            margin: 8px 0 0;
-            color: #0f172a;
-            font-size: 22px;
-            font-weight: 950;
-        }
-
-        .tg-total-odds {
-            margin: 5px 0 0;
-            font-size: 13px;
-            font-weight: 900;
-        }
-
-        .tg-bet-grid {
-            display: grid;
-            grid-template-columns: repeat(3, minmax(0, 1fr));
-            gap: 14px;
-        }
-
-        .tg-bet-card {
-            border-radius: 20px;
-            padding: 18px;
-            border: 1px solid #e7edf6;
-            background: white;
-            box-shadow: 0 8px 20px rgba(15,23,42,.035);
-        }
-
-        .tg-bet-card.meron {
-            background: linear-gradient(180deg, #fff7ed, #ffffff);
-            border-color: #fed7aa;
-        }
-
-        .tg-bet-card.wala {
-            background: linear-gradient(180deg, #eff6ff, #ffffff);
-            border-color: #bfdbfe;
-        }
-
-        .tg-bet-card.draw {
-            background: linear-gradient(180deg, #f5f3ff, #ffffff);
-            border-color: #ddd6fe;
-        }
-
-        .tg-side {
-            margin: 0;
-            font-size: 20px;
-            font-weight: 950;
-        }
-
-        .tg-side.meron {
-            color: #ea580c;
-        }
-
-        .tg-side.wala {
-            color: #2563eb;
-        }
-
-        .tg-side.draw {
-            color: #7c3aed;
-        }
-
-        .tg-side-info {
-            margin-top: 12px;
-            display: grid;
-            gap: 8px;
-        }
-
-        .tg-side-row {
-            display: flex;
-            justify-content: space-between;
-            gap: 12px;
-            color: #64748b;
-            font-size: 13px;
-            font-weight: 800;
-        }
-
-        .tg-side-row strong {
-            color: #0f172a;
-        }
-
-        .tg-form {
-            margin-top: 16px;
-            display: grid;
-            gap: 10px;
-        }
-
-        .tg-input {
-            width: 100%;
-            height: 44px;
-            border-radius: 12px;
-            border: 1px solid #dce6f2;
-            background: white;
-            padding: 0 12px;
-            outline: none;
-            font-size: 14px;
-            font-weight: 800;
-            color: #0f172a;
-        }
-
-        .tg-input:focus {
-            border-color: #3b82f6;
-            box-shadow: 0 0 0 4px rgba(59,130,246,.12);
-        }
-
-        .tg-button {
-            height: 44px;
-            border: 0;
-            border-radius: 12px;
-            color: white;
-            font-size: 13px;
-            font-weight: 950;
-            cursor: pointer;
-            transition: .16s ease;
-        }
-
-        .tg-button:hover {
-            transform: translateY(-1px);
-            filter: brightness(.96);
-        }
-
-        .tg-button:disabled {
-            cursor: not-allowed;
-            opacity: .45;
-            transform: none;
-        }
-
-        .tg-btn-meron {
-            background: #ea580c;
-        }
-
-        .tg-btn-wala {
-            background: #2563eb;
-        }
-
-        .tg-btn-draw {
-            background: #7c3aed;
-        }
-
-        .tg-closed-box {
-            border-radius: 16px;
-            padding: 16px;
-            background: #fff7ed;
-            border: 1px solid #fed7aa;
-            color: #9a3412;
-            font-size: 14px;
-            font-weight: 900;
-        }
-
-        .tg-history-list {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-
-        .tg-history-item {
-            border: 1px solid #e7edf6;
-            border-radius: 14px;
-            padding: 12px;
-            display: flex;
-            justify-content: space-between;
-            gap: 12px;
-            align-items: center;
-        }
-
-        .tg-history-title {
-            margin: 0;
-            color: #0f172a;
-            font-size: 14px;
-            font-weight: 950;
-        }
-
-        .tg-history-sub {
-            margin: 4px 0 0;
-            color: #64748b;
-            font-size: 12px;
-            font-weight: 700;
-        }
-
-        .tg-history-pill {
-            border-radius: 999px;
-            padding: 6px 10px;
-            background: #f1f5f9;
-            color: #334155;
-            font-size: 12px;
-            font-weight: 950;
-            text-transform: uppercase;
-        }
-
-        .tg-empty {
-            border-radius: 18px;
-            padding: 24px;
-            background: #f8fafc;
-            border: 1px dashed #cbd5e1;
-            text-align: center;
-            color: #64748b;
-            font-weight: 800;
-        }
-
-        .tg-road-section {
-            background: white;
-            border: 1px solid #dce6f2;
-            border-radius: 20px;
-            padding: 18px;
-            box-shadow: 0 10px 24px rgba(15,23,42,.045);
-        }
-
-        .tg-score-strip {
-            display: grid;
-            grid-template-columns: repeat(4, minmax(0, 1fr));
-            overflow: hidden;
-            border-radius: 16px;
-            border: 1px solid #dce6f2;
-            box-shadow: 0 10px 24px rgba(15,23,42,.045);
-        }
-
-        .tg-score-box {
-            min-height: 76px;
-            color: white;
-            text-align: center;
-            padding: 10px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            border-right: 1px solid rgba(255,255,255,.16);
-        }
-
-        .tg-score-box:last-child {
-            border-right: 0;
-        }
-
-        .tg-score-label {
-            margin: 0;
-            font-size: 11px;
-            font-weight: 950;
-            text-transform: uppercase;
-            letter-spacing: .22em;
-            color: rgba(255,255,255,.88);
-        }
-
-        .tg-score-value {
-            margin: 4px 0 0;
-            font-size: 34px;
-            line-height: 1;
-            font-weight: 950;
-            color: white;
-        }
-
-        .tg-road-head {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 14px;
-            margin-bottom: 12px;
-        }
-
-        .tg-road-kicker {
-            margin: 0;
-            color: #475569;
-            font-size: 12px;
-            font-weight: 950;
-            text-transform: uppercase;
-            letter-spacing: .22em;
-        }
-
-        .tg-road-title {
-            margin: 2px 0 0;
-            color: #0f172a;
-            font-size: 17px;
-            font-weight: 950;
-            letter-spacing: .06em;
-            text-transform: uppercase;
-        }
-
-        .tg-road-subtitle {
-            margin: 0;
-            color: #64748b;
-            font-size: 12px;
-            font-weight: 900;
-            letter-spacing: .12em;
-        }
-
-        .tg-logrohan-board,
-        .tg-bead-board {
-            width: 100%;
-            overflow-x: auto;
-            overflow-y: hidden;
-            border: 1px solid #dce6f2;
-            border-radius: 16px;
-            background:
-                linear-gradient(#d9e0ea 1px, transparent 1px),
-                linear-gradient(90deg, #d9e0ea 1px, transparent 1px),
-                #ffffff;
-            background-size: 38px 38px;
-        }
-
-        .tg-logrohan-inner,
-        .tg-bead-inner {
-            min-width: 900px;
-            height: 238px;
-            position: relative;
-            padding: 8px;
-        }
-
-        .tg-road-dot {
-            position: absolute;
-            width: 27px;
-            height: 27px;
-            border-radius: 999px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 10px;
-            font-weight: 950;
-            background: white;
-        }
-
-        .tg-road-dot.meron {
-            border: 3px solid #ef4444;
-            color: #ef4444;
-        }
-
-        .tg-road-dot.wala {
-            border: 3px solid #3b82f6;
-            color: #3b82f6;
-        }
-
-        .tg-road-dot.draw {
-            border: 3px solid #22c55e;
-            color: #22c55e;
-        }
-
-        .tg-road-dot.cancelled {
-            border: 3px solid #9ca3af;
-            color: #4b5563;
-        }
-
-        .tg-bead-dot {
-            position: absolute;
-            width: 27px;
-            height: 27px;
-            border-radius: 999px;
-            color: white;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 11px;
-            font-weight: 950;
-            box-shadow: inset 0 -3px 8px rgba(0,0,0,.18), 0 4px 10px rgba(15,23,42,.16);
-        }
-
-        .tg-bead-dot.meron {
-            background: linear-gradient(135deg, #ef4444, #dc2626);
-        }
-
-        .tg-bead-dot.wala {
-            background: linear-gradient(135deg, #60a5fa, #2563eb);
-        }
-
-        .tg-bead-dot.draw {
-            background: linear-gradient(135deg, #22c55e, #16a34a);
-        }
-
-        .tg-bead-dot.cancelled {
-            background: linear-gradient(135deg, #9ca3af, #6b7280);
-        }
-
-        .tg-road-empty-cell {
-            position: absolute;
-            width: 27px;
-            height: 27px;
-            border-radius: 999px;
-            border: 1px dashed #cbd5e1;
-            background: rgba(255,255,255,.45);
-        }
-
-        @media (max-width: 1300px) {
-            .tg-main-grid {
-                grid-template-columns: 1fr;
-            }
-        }
-
-        @media (max-width: 980px) {
-            .tg-hero-inner,
-            .tg-total-grid,
-            .tg-bet-grid,
-            .tg-score-strip {
-                grid-template-columns: 1fr;
-            }
-
-            .tg-hero-inner {
-                flex-direction: column;
-                align-items: stretch;
-            }
-
-            .tg-video {
-                height: 260px;
-            }
-        }
-    </style>
-
-    <div class="tg-page">
-        <section class="tg-hero">
-            <div class="tg-hero-inner">
+    <div class="game-page">
+        <section class="game-hero-card">
+            <div class="game-hero-grid"></div>
+
+            <div class="game-hero-content">
                 <div>
-                    <p class="tg-kicker">Player</p>
-                    <h1 class="tg-title">
+                    <p class="game-kicker">Player</p>
+
+                    <h1 class="game-title">
                         Horse Racing
                     </h1>
-                    <p class="tg-subtitle">
+
+                    <p class="game-subtitle">
                         Bet on Meron, Wala, or Draw. Odds update based on the total pool.
                     </p>
                 </div>
 
-                <div class="tg-wallet-box">
-                    <p class="tg-wallet-label">Wallet Balance</p>
-                    <h2 class="tg-wallet-value">
-                        ₱{{ number_format(auth()->user()->wallet_balance ?? 0, 2) }}
-                    </h2>
+                <div class="game-wallet-card">
+                    <div class="game-wallet-icon">
+                        💼
+                    </div>
+
+                    <div>
+                        <p class="game-wallet-label">Wallet Balance</p>
+
+                        <h2 class="game-wallet-value" data-live="wallet_balance">
+                            ₱{{ number_format($user->wallet_balance ?? 0, 2) }}
+                        </h2>
+                    </div>
                 </div>
             </div>
         </section>
 
         @if(session('success'))
-            <div class="tg-alert tg-alert-success">
+            <div class="game-alert game-alert-success">
                 {{ session('success') }}
             </div>
         @endif
 
         @if($errors->any())
-            <div class="tg-alert tg-alert-error">
+            <div class="game-alert game-alert-error">
                 @foreach($errors->all() as $error)
                     <div>{{ $error }}</div>
                 @endforeach
@@ -716,79 +245,112 @@
         @endif
 
         @if(!$currentGame)
-            <div class="tg-card">
-                <div class="tg-empty">
+            <div class="game-card">
+                <div class="game-empty">
                     No game available yet. Please wait for the admin to create and start a game.
                 </div>
             </div>
         @else
-            <section class="tg-main-grid">
-                <div style="display:flex; flex-direction:column; gap:18px;">
-                    <div class="tg-card tg-video-card">
-                        <div class="tg-video-head">
-                            <div>
-                                <h2 class="tg-game-name">
-                                    {{ $currentGame->title ?? 'Current Game' }}
-                                </h2>
-                                <p class="tg-round">
-                                    Round: {{ $currentGame->round_code ?? $currentGame->id }}
-                                </p>
+            <section class="game-shell">
+                <main class="game-left">
+                    <section class="game-live-section">
+                        <div class="game-video-card">
+                            <div class="game-video-head">
+                                <div>
+                                    <h2 class="game-card-title">
+                                        {{ $currentGame->title ?? 'Current Game' }}
+                                    </h2>
+
+                                    <p class="game-card-sub">
+                                        Round:
+                                        <span data-live="round_code">
+                                            {{ $currentGame->round_code ?? $currentGame->round_number ?? $currentGame->id }}
+                                        </span>
+                                    </p>
+                                </div>
+
+                                <span
+                                    class="game-status-badge"
+                                    data-live="game_status"
+                                    style="background:{{ $statusBg }}; color:{{ $statusColor }};"
+                                >
+                                    {{ strtoupper($currentGame->status) }}
+                                </span>
                             </div>
 
-                            <span
-                                class="tg-status"
-                                style="background:{{ $statusBg }}; color:{{ $statusColor }};"
-                            >
-                                {{ $currentGame->status }}
-                            </span>
+                            <div class="game-video-frame">
+                                @if(!empty($currentGame->video_url))
+                                    <video class="game-video" controls muted playsinline>
+                                        <source src="{{ $currentGame->video_url }}">
+                                    </video>
+                                @else
+                                    <div class="game-video game-video-placeholder">
+                                        <div>
+                                            <div class="game-video-icon">🎥</div>
+                                            <div>No video uploaded for this round</div>
+                                        </div>
+                                    </div>
+                                @endif
+                            </div>
                         </div>
 
-                        <div class="tg-video-wrap">
-                            @if(!empty($currentGame->video_url))
-                                <video class="tg-video" controls muted playsinline>
-                                    <source src="{{ $currentGame->video_url }}">
-                                </video>
-                            @else
-                                <div class="tg-no-video">
+                        <div class="game-market-grid">
+                            @foreach($summaryCards as $card)
+                                <div class="game-market-card game-market-{{ $card['theme'] }}">
+                                    <div class="game-market-top">
+                                        <div class="game-market-icon">
+                                            {{ $card['icon'] }}
+                                        </div>
+
+                                        <span class="game-live-pill">Live</span>
+                                    </div>
+
                                     <div>
-                                        <div style="font-size:42px;">🎥</div>
-                                        <div style="margin-top:10px;">No video uploaded for this round</div>
+                                        <p class="game-market-label">
+                                            <span class="game-label-desktop">{{ $card['fullLabel'] }}</span>
+                                            <span class="game-label-mobile">{{ $card['label'] }}</span>
+                                        </p>
+
+                                        <h3 class="game-market-value" data-live="{{ $card['totalKey'] }}">
+                                            {{ $card['value'] }}
+                                        </h3>
+
+                                        <p class="game-market-sub" data-live="{{ $card['oddsKey'] }}">
+                                            {{ $card['sub'] }}
+                                        </p>
                                     </div>
                                 </div>
-                            @endif
+                            @endforeach
                         </div>
-                    </div>
+                    </section>
 
-                    <div class="tg-total-grid">
-                        <div class="tg-total-box">
-                            <p class="tg-total-label">Meron Total</p>
-                            <h3 class="tg-total-value">₱{{ number_format($meronTotal, 2) }}</h3>
-                            <p class="tg-total-odds" style="color:#ea580c;">Odds {{ number_format($meronOdds, 2) }}x</p>
-                        </div>
+                    <section class="game-total-row">
+                        @foreach($summaryCards as $card)
+                            <div class="game-total-card game-total-{{ $card['theme'] }}">
+                                <div class="game-total-icon">
+                                    {{ $card['icon'] }}
+                                </div>
 
-                        <div class="tg-total-box">
-                            <p class="tg-total-label">Wala Total</p>
-                            <h3 class="tg-total-value">₱{{ number_format($walaTotal, 2) }}</h3>
-                            <p class="tg-total-odds" style="color:#2563eb;">Odds {{ number_format($walaOdds, 2) }}x</p>
-                        </div>
+                                <div>
+                                    <p class="game-total-label">{{ $card['fullLabel'] }}</p>
 
-                        <div class="tg-total-box">
-                            <p class="tg-total-label">Draw Total</p>
-                            <h3 class="tg-total-value">₱{{ number_format($drawTotal, 2) }}</h3>
-                            <p class="tg-total-odds" style="color:#7c3aed;">Odds {{ number_format($drawOdds, 2) }}x</p>
-                        </div>
+                                    <h3 class="game-total-value" data-live="{{ $card['totalKey'] }}">
+                                        {{ $card['value'] }}
+                                    </h3>
 
-                        <div class="tg-total-box">
-                            <p class="tg-total-label">Total Pool</p>
-                            <h3 class="tg-total-value">₱{{ number_format($totalPool, 2) }}</h3>
-                            <p class="tg-total-odds" style="color:#16a34a;">Net ₱{{ number_format($netPool, 2) }}</p>
-                        </div>
-                    </div>
+                                    <p class="game-total-sub" data-live="{{ $card['oddsKey'] }}">
+                                        {{ $card['sub'] }}
+                                    </p>
+                                </div>
+                            </div>
+                        @endforeach
+                    </section>
 
-                    <div class="tg-card">
-                        <div style="margin-bottom:16px;">
-                            <h2 class="tg-section-title">Place Your Bet</h2>
-                            <p class="tg-section-sub">
+                    <section class="game-card">
+                        <div>
+                            <h2 class="game-card-title">Place Your Bet</h2>
+
+                            <p class="game-card-sub" id="placeBetSubtitle">
                                 @if($isOpen)
                                     Betting is open. Choose your side and enter your amount.
                                 @elseif($isWaiting)
@@ -801,302 +363,478 @@
                             </p>
                         </div>
 
-                        @if(!$isOpen)
-                            <div class="tg-closed-box">
-                                You cannot bet because this game status is
-                                <strong>{{ strtoupper($currentGame->status) }}</strong>.
-                                Admin must create/start a new game with status <strong>OPEN</strong>.
-                            </div>
-                        @endif
-
-                        <div class="tg-bet-grid" style="margin-top:16px;">
-                            <div class="tg-bet-card meron">
-                                <h3 class="tg-side meron">MERON</h3>
-
-                                <div class="tg-side-info">
-                                    <div class="tg-side-row">
-                                        <span>Total</span>
-                                        <strong>₱{{ number_format($meronTotal, 2) }}</strong>
-                                    </div>
-                                    <div class="tg-side-row">
-                                        <span>Odds</span>
-                                        <strong>{{ number_format($meronOdds, 2) }}x</strong>
-                                    </div>
-                                </div>
-
-                                <form method="POST" action="{{ route('player.game.bet') }}" class="tg-form">
-                                    @csrf
-                                    <input type="hidden" name="game_round_id" value="{{ $currentGame->id }}">
-                                    <input type="hidden" name="side" value="meron">
-
-                                    <input
-                                        type="number"
-                                        name="amount"
-                                        class="tg-input"
-                                        min="1"
-                                        step="1"
-                                        placeholder="Enter amount"
-                                        {{ !$isOpen ? 'disabled' : '' }}
-                                    >
-
-                                    <button
-                                        type="submit"
-                                        class="tg-button tg-btn-meron"
-                                        {{ !$isOpen ? 'disabled' : '' }}
-                                    >
-                                        Bet Meron
-                                    </button>
-                                </form>
-                            </div>
-
-                            <div class="tg-bet-card wala">
-                                <h3 class="tg-side wala">WALA</h3>
-
-                                <div class="tg-side-info">
-                                    <div class="tg-side-row">
-                                        <span>Total</span>
-                                        <strong>₱{{ number_format($walaTotal, 2) }}</strong>
-                                    </div>
-                                    <div class="tg-side-row">
-                                        <span>Odds</span>
-                                        <strong>{{ number_format($walaOdds, 2) }}x</strong>
-                                    </div>
-                                </div>
-
-                                <form method="POST" action="{{ route('player.game.bet') }}" class="tg-form">
-                                    @csrf
-                                    <input type="hidden" name="game_round_id" value="{{ $currentGame->id }}">
-                                    <input type="hidden" name="side" value="wala">
-
-                                    <input
-                                        type="number"
-                                        name="amount"
-                                        class="tg-input"
-                                        min="1"
-                                        step="1"
-                                        placeholder="Enter amount"
-                                        {{ !$isOpen ? 'disabled' : '' }}
-                                    >
-
-                                    <button
-                                        type="submit"
-                                        class="tg-button tg-btn-wala"
-                                        {{ !$isOpen ? 'disabled' : '' }}
-                                    >
-                                        Bet Wala
-                                    </button>
-                                </form>
-                            </div>
-
-                            <div class="tg-bet-card draw">
-                                <h3 class="tg-side draw">DRAW</h3>
-
-                                <div class="tg-side-info">
-                                    <div class="tg-side-row">
-                                        <span>Total</span>
-                                        <strong>₱{{ number_format($drawTotal, 2) }}</strong>
-                                    </div>
-                                    <div class="tg-side-row">
-                                        <span>Odds</span>
-                                        <strong>{{ number_format($drawOdds, 2) }}x</strong>
-                                    </div>
-                                </div>
-
-                                <form method="POST" action="{{ route('player.game.bet') }}" class="tg-form">
-                                    @csrf
-                                    <input type="hidden" name="game_round_id" value="{{ $currentGame->id }}">
-                                    <input type="hidden" name="side" value="draw">
-
-                                    <input
-                                        type="number"
-                                        name="amount"
-                                        class="tg-input"
-                                        min="1"
-                                        step="1"
-                                        placeholder="Enter amount"
-                                        {{ !$isOpen ? 'disabled' : '' }}
-                                    >
-
-                                    <button
-                                        type="submit"
-                                        class="tg-button tg-btn-draw"
-                                        {{ !$isOpen ? 'disabled' : '' }}
-                                    >
-                                        Bet Draw
-                                    </button>
-                                </form>
-                            </div>
+                        <div
+                            class="game-warning"
+                            id="gameClosedWarning"
+                            style="{{ $isOpen ? 'display:none;' : '' }}"
+                        >
+                            ⚠ You cannot bet because this game status is
+                            <strong data-live="game_status_text">{{ strtoupper($currentGame->status) }}</strong>.
+                            Admin must create/start a new game with status <strong>OPEN</strong>.
                         </div>
-                    </div>
-                </div>
 
-                <aside style="display:flex; flex-direction:column; gap:18px;">
-                    <div class="tg-card">
-                        <h2 class="tg-section-title">My Latest Bets</h2>
-                        <p class="tg-section-sub">Your recent bet records.</p>
+                        <div class="game-bet-grid">
+                            @foreach($betCards as $card)
+                                <div class="game-bet-card game-bet-{{ $card['theme'] }}">
+                                    <div class="game-bet-head">
+                                        <div class="game-bet-icon">
+                                            {{ $card['letter'] }}
+                                        </div>
 
-                        <div class="tg-history-list" style="margin-top:14px;">
-                            @forelse($myBets as $bet)
-                                <div class="tg-history-item">
-                                    <div>
-                                        <p class="tg-history-title">
-                                            {{ strtoupper($bet->side) }} — ₱{{ number_format($bet->amount, 2) }}
-                                        </p>
-                                        <p class="tg-history-sub">
-                                            Round: {{ $bet->round?->round_code ?? $bet->game_round_id }}
-                                            • Odds {{ number_format($bet->odds_at_bet, 2) }}x
-                                        </p>
+                                        <h3 class="game-bet-title">
+                                            {{ $card['title'] }}
+                                        </h3>
                                     </div>
 
-                                    <span class="tg-history-pill">
-                                        {{ $bet->status }}
+                                    <div class="game-bet-info">
+                                        <div class="game-bet-row">
+                                            <span>Total</span>
+                                            <strong data-live="{{ $card['totalKey'] }}">
+                                                ₱{{ number_format($card['total'], 2) }}
+                                            </strong>
+                                        </div>
+
+                                        <div class="game-bet-row">
+                                            <span>Odds</span>
+                                            <strong data-live="{{ $card['oddsKey'] }}">
+                                                Odds {{ number_format($card['odds'], 2) }}x
+                                            </strong>
+                                        </div>
+                                    </div>
+
+                                    <form method="POST" action="{{ route('player.game.bet') }}" class="game-bet-form">
+                                        @csrf
+
+                                        <input
+                                            type="hidden"
+                                            name="game_round_id"
+                                            value="{{ $currentGame->id }}"
+                                            data-live-input="game_round_id"
+                                        >
+
+                                        <input type="hidden" name="side" value="{{ $card['side'] }}">
+
+                                        <input
+                                            type="number"
+                                            name="amount"
+                                            min="1"
+                                            step="1"
+                                            placeholder="Enter amount"
+                                            class="game-input js-bet-field"
+                                            {{ !$isOpen ? 'disabled' : '' }}
+                                        >
+
+                                        <button
+                                            type="submit"
+                                            class="game-btn js-bet-field"
+                                            {{ !$isOpen ? 'disabled' : '' }}
+                                        >
+                                            {{ $card['button'] }}
+                                        </button>
+                                    </form>
+                                </div>
+                            @endforeach
+                        </div>
+                    </section>
+                </main>
+
+                <aside class="game-right">
+                    <section class="game-card">
+                        <h2 class="game-card-title">My Latest Bets</h2>
+                        <p class="game-card-sub">Your recent bet records.</p>
+
+                        <div class="game-bet-history" id="liveLatestBets">
+                            @forelse($myBets as $bet)
+                                @php
+                                    $betSide = strtolower($bet->side);
+
+                                    $betColor = match ($betSide) {
+                                        'meron' => '#ef4444',
+                                        'wala' => '#2563eb',
+                                        'draw' => '#7c3aed',
+                                        default => '#64748b',
+                                    };
+
+                                    $betLetter = match ($betSide) {
+                                        'meron' => 'M',
+                                        'wala' => 'W',
+                                        'draw' => 'D',
+                                        default => '?',
+                                    };
+
+                                    $betStatus = strtolower($bet->status ?? 'pending');
+                                @endphp
+
+                                <div class="game-history-item">
+                                    <div class="game-history-left">
+                                        <div class="game-history-icon" style="background:{{ $betColor }};">
+                                            {{ $betLetter }}
+                                        </div>
+
+                                        <div class="game-history-text">
+                                            <p class="game-history-title">
+                                                {{ strtoupper($bet->side) }} — ₱{{ number_format($bet->amount, 2) }}
+                                            </p>
+
+                                            <p class="game-history-sub">
+                                                Round: {{ $bet->round?->round_code ?? $bet->game_round_id }}
+                                                • Odds {{ number_format($bet->odds_at_bet, 2) }}x
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    <span class="game-status-pill {{ $betStatus }}">
+                                        {{ strtoupper($bet->status) }}
                                     </span>
                                 </div>
                             @empty
-                                <div class="tg-empty">
+                                <div class="game-empty">
                                     No bets yet.
                                 </div>
                             @endforelse
                         </div>
-                    </div>
+                    </section>
 
-                    <div style="display:flex; flex-direction:column; gap:18px;">
-                        <div class="tg-score-strip">
-                            <div class="tg-score-box" style="background:#ef4444;">
-                                <p class="tg-score-label">Meron</p>
-                                <h3 class="tg-score-value">{{ $meronCount }}</h3>
-                            </div>
-
-                            <div class="tg-score-box" style="background:#3b82f6;">
-                                <p class="tg-score-label">Wala</p>
-                                <h3 class="tg-score-value">{{ $walaCount }}</h3>
-                            </div>
-
-                            <div class="tg-score-box" style="background:#22c55e;">
-                                <p class="tg-score-label">Draw</p>
-                                <h3 class="tg-score-value">{{ $drawCount }}</h3>
-                            </div>
-
-                            <div class="tg-score-box" style="background:#9ca3af;">
-                                <p class="tg-score-label">Cancelled</p>
-                                <h3 class="tg-score-value">{{ $cancelledCount }}</h3>
-                            </div>
+                    <section class="game-score-strip">
+                        <div class="game-score-box game-score-meron">
+                            <p>Meron</p>
+                            <h3 data-live="meron_count">{{ $meronCount }}</h3>
                         </div>
 
-                        <section class="tg-road-section">
-                            <div class="tg-road-head">
-                                <div>
-                                    <p class="tg-road-kicker">Logrohan</p>
-                                    <h2 class="tg-road-title">Result Pattern</h2>
-                                </div>
+                        <div class="game-score-box game-score-wala">
+                            <p>Wala</p>
+                            <h3 data-live="wala_count">{{ $walaCount }}</h3>
+                        </div>
+
+                        <div class="game-score-box game-score-draw">
+                            <p>Draw</p>
+                            <h3 data-live="draw_count">{{ $drawCount }}</h3>
+                        </div>
+
+                        <div class="game-score-box game-score-cancel">
+                            <p>Cancel</p>
+                            <h3 data-live="cancelled_count">{{ $cancelledCount }}</h3>
+                        </div>
+                    </section>
+
+                    <section class="game-card">
+                        <div class="game-road-head">
+                            <div>
+                                <p class="game-road-kicker">Road</p>
+                                <h2 class="game-road-title">Big Road</h2>
                             </div>
 
-                            <div class="tg-logrohan-board">
-                                <div class="tg-logrohan-inner">
-                                    @forelse($roadEntries as $index => $entry)
-                                        @php
-                                            $side = strtolower($entry->winning_side ?? $entry->result ?? 'cancelled');
+                            <p class="game-road-note">Pattern by streak</p>
+                        </div>
 
-                                            if ($side === 'canceled' || $side === 'cancel') {
-                                                $side = 'cancelled';
-                                            }
+                        <div class="road-board">
+                            <div class="big-road-inner">
+                                @for($i = 0; $i < 240; $i++)
+                                    @php
+                                        $row = $i % 6;
+                                        $col = floor($i / 6);
+                                        $left = 8 + ($col * 34);
+                                        $top = 8 + ($row * 34);
+                                    @endphp
 
-                                            if (!in_array($side, ['meron', 'wala', 'draw', 'cancelled'])) {
-                                                $side = 'cancelled';
-                                            }
+                                    <div class="road-empty-cell" style="left:{{ $left }}px; top:{{ $top }}px;"></div>
+                                @endfor
 
-                                            $row = $index % 6;
-                                            $col = floor($index / 6);
+                                @forelse($bigRoadPositions as $item)
+                                    @php
+                                        $left = 8 + ($item['col'] * 34);
+                                        $top = 8 + ($item['row'] * 34);
+                                        $entry = $item['entry'];
+                                    @endphp
 
-                                            $left = 11 + ($col * 38);
-                                            $top = 11 + ($row * 38);
-
-                                            $label = match ($side) {
-                                                'meron' => 'M',
-                                                'wala' => 'W',
-                                                'draw' => 'D',
-                                                default => 'C',
-                                            };
-                                        @endphp
-
-                                        <div
-                                            class="tg-road-dot {{ $side }}"
-                                            style="left:{{ $left }}px; top:{{ $top }}px;"
-                                            title="{{ strtoupper($side) }} - {{ $entry->round_code ?? $entry->id }}"
-                                        >
-                                            {{ $label }}
-                                        </div>
-                                    @empty
-                                        <div style="padding:24px; color:#64748b; font-weight:900;">
-                                            No result history yet.
-                                        </div>
-                                    @endforelse
-                                </div>
+                                    <div
+                                        class="big-road-dot {{ $item['side'] }}"
+                                        style="left:{{ $left }}px; top:{{ $top }}px;"
+                                        title="{{ strtoupper($item['side']) }} - {{ $entry->round_code ?? $entry->id }}"
+                                    >
+                                        {{ $item['label'] }}
+                                    </div>
+                                @empty
+                                    <div class="game-road-empty">
+                                        No result history yet.
+                                    </div>
+                                @endforelse
                             </div>
-                        </section>
+                        </div>
+                    </section>
 
-                        <section class="tg-road-section">
-                            <div class="tg-road-head">
-                                <div>
-                                    <p class="tg-road-kicker">Road</p>
-                                    <h2 class="tg-road-title">Bead Road</h2>
-                                </div>
-
-                                <p class="tg-road-subtitle">Latest Results</p>
+                    <section class="game-card">
+                        <div class="game-road-head">
+                            <div>
+                                <p class="game-road-kicker">Road</p>
+                                <h2 class="game-road-title">Bead Road</h2>
                             </div>
 
-                            <div class="tg-bead-board">
-                                <div class="tg-bead-inner">
-                                    @for($i = 0; $i < 144; $i++)
-                                        @php
-                                            $row = $i % 6;
-                                            $col = floor($i / 6);
+                            <p class="game-road-note">Chronological</p>
+                        </div>
 
-                                            $left = 11 + ($col * 38);
-                                            $top = 11 + ($row * 38);
-                                        @endphp
+                        <div class="road-board">
+                            <div class="bead-road-inner">
+                                @for($i = 0; $i < 240; $i++)
+                                    @php
+                                        $row = $i % 6;
+                                        $col = floor($i / 6);
+                                        $left = 8 + ($col * 34);
+                                        $top = 8 + ($row * 34);
+                                    @endphp
 
-                                        <div
-                                            class="tg-road-empty-cell"
-                                            style="left:{{ $left }}px; top:{{ $top }}px;"
-                                        ></div>
-                                    @endfor
+                                    <div class="road-empty-cell" style="left:{{ $left }}px; top:{{ $top }}px;"></div>
+                                @endfor
 
-                                    @foreach($roadEntries as $index => $entry)
-                                        @php
-                                            $side = strtolower($entry->winning_side ?? $entry->result ?? 'cancelled');
+                                @foreach($roadEntries as $index => $entry)
+                                    @php
+                                        $side = $normalizeSide($entry);
+                                        $row = $index % 6;
+                                        $col = floor($index / 6);
+                                        $left = 8 + ($col * 34);
+                                        $top = 8 + ($row * 34);
+                                        $number = $index + 1;
+                                    @endphp
 
-                                            if ($side === 'canceled' || $side === 'cancel') {
-                                                $side = 'cancelled';
-                                            }
-
-                                            if (!in_array($side, ['meron', 'wala', 'draw', 'cancelled'])) {
-                                                $side = 'cancelled';
-                                            }
-
-                                            $row = $index % 6;
-                                            $col = floor($index / 6);
-
-                                            $left = 11 + ($col * 38);
-                                            $top = 11 + ($row * 38);
-
-                                            $number = $index + 1;
-                                        @endphp
-
-                                        <div
-                                            class="tg-bead-dot {{ $side }}"
-                                            style="left:{{ $left }}px; top:{{ $top }}px;"
-                                            title="{{ strtoupper($side) }} - {{ $entry->round_code ?? $entry->id }}"
-                                        >
-                                            {{ $number }}
-                                        </div>
-                                    @endforeach
-                                </div>
+                                    <div
+                                        class="bead-road-dot {{ $side }}"
+                                        style="left:{{ $left }}px; top:{{ $top }}px;"
+                                        title="{{ strtoupper($side) }} - {{ $entry->round_code ?? $entry->id }}"
+                                    >
+                                        {{ $number }}
+                                    </div>
+                                @endforeach
                             </div>
-                        </section>
-                    </div>
+                        </div>
+                    </section>
                 </aside>
             </section>
         @endif
     </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            const liveUrl = @json(route('player.game.live'));
+
+            let latestGameId = @json($currentGame?->id);
+
+            const money = (value) => {
+                const number = Number(value || 0);
+
+                return '₱' + number.toLocaleString('en-PH', {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                });
+            };
+
+            const odds = (value) => {
+                const number = Number(value || 0);
+
+                return 'Odds ' + number.toFixed(2) + 'x';
+            };
+
+            const setAll = (key, value) => {
+                document.querySelectorAll(`[data-live="${key}"]`).forEach((el) => {
+                    el.textContent = value;
+                });
+            };
+
+            const setGameRoundInputs = (gameId) => {
+                document.querySelectorAll('[data-live-input="game_round_id"]').forEach((input) => {
+                    input.value = gameId;
+                });
+            };
+
+            const statusStyle = (status) => {
+                switch (status) {
+                    case 'open':
+                        return { bg: '#dcfce7', color: '#16a34a' };
+                    case 'waiting':
+                        return { bg: '#fef3c7', color: '#d97706' };
+                    case 'closed':
+                        return { bg: '#dbeafe', color: '#2563eb' };
+                    case 'ended':
+                        return { bg: '#fee2e2', color: '#dc2626' };
+                    case 'settled':
+                        return { bg: '#f3e8ff', color: '#7c3aed' };
+                    default:
+                        return { bg: '#f1f5f9', color: '#64748b' };
+                }
+            };
+
+            const updateStatusUi = (status) => {
+                const statusKey = String(status || '').toLowerCase();
+                const isOpen = statusKey === 'open';
+
+                const statusEl = document.querySelector('[data-live="game_status"]');
+                const style = statusStyle(statusKey);
+
+                if (statusEl) {
+                    statusEl.textContent = statusKey.toUpperCase();
+                    statusEl.style.background = style.bg;
+                    statusEl.style.color = style.color;
+                }
+
+                setAll('game_status_text', statusKey.toUpperCase());
+
+                const warning = document.getElementById('gameClosedWarning');
+
+                if (warning) {
+                    warning.style.display = isOpen ? 'none' : 'block';
+                }
+
+                document.querySelectorAll('.js-bet-field').forEach((el) => {
+                    el.disabled = !isOpen;
+                });
+
+                const placeBetSubtitle = document.getElementById('placeBetSubtitle');
+
+                if (placeBetSubtitle) {
+                    if (isOpen) {
+                        placeBetSubtitle.textContent = 'Betting is open. Choose your side and enter your amount.';
+                    } else if (statusKey === 'waiting') {
+                        placeBetSubtitle.textContent = 'Game is waiting. Admin has not opened betting yet.';
+                    } else if (statusKey === 'closed') {
+                        placeBetSubtitle.textContent = 'Betting is already closed for this round.';
+                    } else if (statusKey === 'ended' || statusKey === 'settled') {
+                        placeBetSubtitle.textContent = 'This round already ended. Please wait for a new game.';
+                    } else {
+                        placeBetSubtitle.textContent = 'Please wait for the admin to create or start a game.';
+                    }
+                }
+            };
+
+            const betColor = (side) => {
+                switch (side) {
+                    case 'meron':
+                        return '#ef4444';
+                    case 'wala':
+                        return '#2563eb';
+                    case 'draw':
+                        return '#7c3aed';
+                    default:
+                        return '#64748b';
+                }
+            };
+
+            const betLetter = (side) => {
+                switch (side) {
+                    case 'meron':
+                        return 'M';
+                    case 'wala':
+                        return 'W';
+                    case 'draw':
+                        return 'D';
+                    default:
+                        return '?';
+                }
+            };
+
+            const renderLatestBets = (bets) => {
+                const box = document.getElementById('liveLatestBets');
+
+                if (!box) {
+                    return;
+                }
+
+                if (!bets || bets.length === 0) {
+                    box.innerHTML = `
+                        <div class="game-empty">
+                            No bets yet.
+                        </div>
+                    `;
+
+                    return;
+                }
+
+                box.innerHTML = bets.map((bet) => {
+                    const sideKey = bet.side_key || '';
+                    const statusKey = bet.status_key || 'pending';
+
+                    return `
+                        <div class="game-history-item">
+                            <div class="game-history-left">
+                                <div class="game-history-icon" style="background:${betColor(sideKey)};">
+                                    ${betLetter(sideKey)}
+                                </div>
+
+                                <div class="game-history-text">
+                                    <p class="game-history-title">
+                                        ${bet.side} — ${money(bet.amount)}
+                                    </p>
+
+                                    <p class="game-history-sub">
+                                        Round: ${bet.round} • Odds ${Number(bet.odds || 0).toFixed(2)}x
+                                    </p>
+                                </div>
+                            </div>
+
+                            <span class="game-status-pill ${statusKey}">
+                                ${bet.status}
+                            </span>
+                        </div>
+                    `;
+                }).join('');
+            };
+
+            const loadLiveGame = async () => {
+                try {
+                    const response = await fetch(liveUrl, {
+                        headers: {
+                            'Accept': 'application/json',
+                            'X-Requested-With': 'XMLHttpRequest',
+                        },
+                        cache: 'no-store',
+                    });
+
+                    if (!response.ok) {
+                        return;
+                    }
+
+                    const data = await response.json();
+
+                    setAll('wallet_balance', money(data.wallet_balance));
+
+                    if (data.has_game && data.game) {
+                        if (latestGameId && Number(latestGameId) !== Number(data.game.id)) {
+                            window.location.reload();
+                            return;
+                        }
+
+                        latestGameId = data.game.id;
+
+                        setGameRoundInputs(data.game.id);
+                        setAll('round_code', data.game.round_code);
+
+                        setAll('meron_total', money(data.game.meron_total));
+                        setAll('wala_total', money(data.game.wala_total));
+                        setAll('draw_total', money(data.game.draw_total));
+                        setAll('total_pool', money(data.game.total_pool));
+                        setAll('net_pool', 'Net ' + money(data.game.net_pool));
+
+                        setAll('meron_odds', odds(data.game.meron_odds));
+                        setAll('wala_odds', odds(data.game.wala_odds));
+                        setAll('draw_odds', odds(data.game.draw_odds));
+
+                        updateStatusUi(data.game.status);
+                    }
+
+                    if (data.road_counts) {
+                        setAll('meron_count', data.road_counts.meron);
+                        setAll('wala_count', data.road_counts.wala);
+                        setAll('draw_count', data.road_counts.draw);
+                        setAll('cancelled_count', data.road_counts.cancelled);
+                    }
+
+                    renderLatestBets(data.my_bets);
+                } catch (error) {
+                    console.error('Live game update failed:', error);
+                }
+            };
+
+            loadLiveGame();
+
+            setInterval(loadLiveGame, 1000);
+        });
+    </script>
 </x-layouts.app>

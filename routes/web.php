@@ -48,6 +48,12 @@ Route::middleware(['auth'])->group(function () {
         Route::get('/dashboard', [AdminDashboardController::class, 'index'])
             ->name('dashboard');
 
+        /*
+        |--------------------------------------------------------------------------
+        | Admin Agents
+        |--------------------------------------------------------------------------
+        */
+
         Route::get('/agents', [AdminAgentController::class, 'index'])
             ->name('agents.index');
 
@@ -56,6 +62,12 @@ Route::middleware(['auth'])->group(function () {
 
         Route::post('/agents/{agent}/deactivate', [AdminAgentController::class, 'deactivate'])
             ->name('agents.deactivate');
+
+        /*
+        |--------------------------------------------------------------------------
+        | Admin Players
+        |--------------------------------------------------------------------------
+        */
 
         Route::get('/players', [AdminPlayerController::class, 'index'])
             ->name('players.index');
@@ -74,6 +86,9 @@ Route::middleware(['auth'])->group(function () {
 
         Route::get('/games', [AdminGameController::class, 'index'])
             ->name('games.index');
+
+        Route::get('/games/live', [AdminGameController::class, 'liveData'])
+            ->name('games.live');
 
         Route::post('/games', [AdminGameController::class, 'store'])
             ->name('games.store');
@@ -107,7 +122,7 @@ Route::middleware(['auth'])->group(function () {
 
         /*
         |--------------------------------------------------------------------------
-        | Admin Money Requests / Agent Wallet Requests
+        | Admin Money Requests / Withdrawals
         |--------------------------------------------------------------------------
         */
 
@@ -170,7 +185,7 @@ Route::middleware(['auth'])->group(function () {
 
         /*
         |--------------------------------------------------------------------------
-        | Admin Monitoring / New Reports
+        | Admin Monitoring
         |--------------------------------------------------------------------------
         */
 
@@ -274,6 +289,9 @@ Route::middleware(['auth'])->group(function () {
         Route::get('/game', [PlayerGameController::class, 'index'])
             ->name('game.index');
 
+        Route::get('/game/live', [PlayerGameController::class, 'liveData'])
+            ->name('game.live');
+
         Route::post('/game/bet', [PlayerGameController::class, 'bet'])
             ->name('game.bet');
 
@@ -293,3 +311,7 @@ Route::middleware(['auth'])->group(function () {
             ->name('wallet.withdraw');
     });
 });
+
+if (file_exists(__DIR__ . '/auth.php')) {
+    require __DIR__ . '/auth.php';
+}
