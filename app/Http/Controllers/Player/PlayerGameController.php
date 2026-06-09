@@ -15,6 +15,10 @@ class PlayerGameController extends Controller
 {
     public function index(Request $request)
     {
+        if ($redirect = $this->blockIfKycNotApproved()) {
+            return $redirect;
+        }
+
         $gameRooms = $this->availableRooms();
 
         $currentGame = null;
@@ -35,7 +39,11 @@ class PlayerGameController extends Controller
             'currentGame' => $currentGame,
             'gameRooms' => $gameRooms,
             'selectedGameId' => $currentGame?->id,
-            'logrohan' => LogrohanEntry::latest()->take(240)->get(),
+            'logrohan' => LogrohanEntry::latest()
+                ->take(120)
+                ->get()
+                ->reverse()
+                ->values(),
             'myBets' => GameBet::with('round')
                 ->where('user_id', auth()->id())
                 ->when($currentGame, function ($query) use ($currentGame) {
@@ -49,6 +57,13 @@ class PlayerGameController extends Controller
 
     public function liveData(Request $request)
     {
+        if ($redirect = $this->blockIfKycNotApproved()) {
+            return response()->json([
+                'redirect' => route('player.kyc.index'),
+                'message' => 'KYC verification required.',
+            ], 403);
+        }
+
         $currentGame = null;
 
         if ($request->filled('game_id')) {
@@ -65,6 +80,7 @@ class PlayerGameController extends Controller
                 'title' => $game->title ?? $game->round_name ?? 'Game Room',
                 'round_code' => $game->round_code ?? $game->round_number ?? $game->id,
                 'status' => $game->status,
+                'winning_side' => $game->winning_side,
                 'total_pool' => (float) ($game->total_pool ?? 0),
             ];
         });
@@ -86,11 +102,17 @@ class PlayerGameController extends Controller
                     'odds' => (float) $bet->odds_at_bet,
                     'status' => strtoupper($bet->status),
                     'status_key' => strtolower($bet->status),
-                    'round' => $bet->round?->round_code ?? $bet->game_round_id,
+                    'round' => $bet->round?->round_code
+                        ?? $bet->round?->round_number
+                        ?? $bet->game_round_id,
                 ];
             });
 
-        $logrohan = LogrohanEntry::latest()->take(240)->get();
+        $logrohan = LogrohanEntry::latest()
+            ->take(120)
+            ->get()
+            ->reverse()
+            ->values();
 
         $normalizeSide = function ($entry) {
             $side = strtolower($entry->winning_side ?? $entry->result ?? $entry->side ?? 'cancelled');
@@ -106,6 +128,26 @@ class PlayerGameController extends Controller
             return $side;
         };
 
+        $road = $logrohan->map(function ($entry) use ($normalizeSide) {
+            $side = $normalizeSide($entry);
+
+            return [
+                'id' => $entry->id,
+                'side' => $side,
+                'label' => match ($side) {
+                    'meron' => 'M',
+                    'wala' => 'W',
+                    'draw' => 'D',
+                    default => 'C',
+                },
+                'round' => $entry->round_number
+                    ?? $entry->round_code
+                    ?? $entry->game_round_id
+                    ?? $entry->id,
+                'created_at' => optional($entry->created_at)->format('M d, h:i A'),
+            ];
+        });
+
         $meronCount = $logrohan->filter(fn ($entry) => $normalizeSide($entry) === 'meron')->count();
         $walaCount = $logrohan->filter(fn ($entry) => $normalizeSide($entry) === 'wala')->count();
         $drawCount = $logrohan->filter(fn ($entry) => $normalizeSide($entry) === 'draw')->count();
@@ -117,6 +159,7 @@ class PlayerGameController extends Controller
                 'wallet_balance' => (float) ($user->wallet_balance ?? 0),
                 'rooms' => $rooms,
                 'my_bets' => $myBets,
+                'road' => $road,
                 'road_counts' => [
                     'meron' => $meronCount,
                     'wala' => $walaCount,
@@ -136,6 +179,7 @@ class PlayerGameController extends Controller
                 'title' => $currentGame->title ?? $currentGame->round_name ?? 'Game Room',
                 'round_code' => $currentGame->round_code ?? $currentGame->round_number ?? $currentGame->id,
                 'status' => $currentGame->status,
+                'winning_side' => $currentGame->winning_side,
 
                 'meron_total' => (float) ($currentGame->meron_total ?? 0),
                 'wala_total' => (float) ($currentGame->wala_total ?? 0),
@@ -149,6 +193,7 @@ class PlayerGameController extends Controller
             ],
 
             'my_bets' => $myBets,
+            'road' => $road,
 
             'road_counts' => [
                 'meron' => $meronCount,
@@ -161,6 +206,10 @@ class PlayerGameController extends Controller
 
     public function bet(Request $request)
     {
+        if ($redirect = $this->blockIfKycNotApproved()) {
+            return $redirect;
+        }
+
         $data = $request->validate([
             'game_round_id' => ['required', 'exists:game_rounds,id'],
             'side' => ['required', 'in:meron,wala,draw'],
@@ -174,14 +223,30 @@ class PlayerGameController extends Controller
                 ->lockForUpdate()
                 ->firstOrFail();
 
+            if ($player->kyc_status !== 'approved') {
+                return redirect()
+                    ->route('player.kyc.index')
+                    ->withErrors([
+                        'kyc' => 'You need to complete KYC verification before placing bets.',
+                    ]);
+            }
+
+            if (!$player->is_active) {
+                return redirect()
+                    ->route('player.account.inactive')
+                    ->withErrors([
+                        'account' => 'Your account is inactive. Please submit an appeal.',
+                    ]);
+            }
+
             $game = GameRound::whereKey($data['game_round_id'])
                 ->lockForUpdate()
                 ->firstOrFail();
 
-            if (in_array($game->status, ['ended', 'settled'])) {
+            if ($game->status === 'ended') {
                 return redirect()
-                    ->route('player.game.index', ['game_id' => $game->id])
-                    ->withErrors(['game' => 'This game room is already declared. Please choose another open room.']);
+                    ->route('player.game.index')
+                    ->withErrors(['game' => 'This game room is already ended. Please choose another room.']);
             }
 
             if ($game->status !== 'open') {
@@ -190,10 +255,10 @@ class PlayerGameController extends Controller
                     ->withErrors(['game' => 'Betting is closed. Please choose an open room.']);
             }
 
-            if (!$player->is_active) {
+            if (filled($game->winning_side)) {
                 return redirect()
                     ->route('player.game.index', ['game_id' => $game->id])
-                    ->withErrors(['account' => 'Your account is inactive.']);
+                    ->withErrors(['game' => 'This round is already declared. Please wait for the next round.']);
             }
 
             if ((float) $player->wallet_balance < $amount) {
@@ -252,5 +317,32 @@ class PlayerGameController extends Controller
             ->latest('id')
             ->take(50)
             ->get();
+    }
+
+    private function blockIfKycNotApproved()
+    {
+        $user = auth()->user();
+
+        if (!$user) {
+            return redirect()->route('login');
+        }
+
+        if ($user->role === 'player' && !$user->is_active) {
+            return redirect()
+                ->route('player.account.inactive')
+                ->withErrors([
+                    'account' => 'Your account is inactive. Please submit an appeal.',
+                ]);
+        }
+
+        if ($user->role === 'player' && $user->kyc_status !== 'approved') {
+            return redirect()
+                ->route('player.kyc.index')
+                ->withErrors([
+                    'kyc' => 'You need to complete KYC verification before playing games.',
+                ]);
+        }
+
+        return null;
     }
 }

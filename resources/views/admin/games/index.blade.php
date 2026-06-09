@@ -4,9 +4,13 @@
         $hasSelectedGame = request()->filled('game_id') && $currentGame;
 
         $status = $currentGame?->status ?? 'no_game';
+        $alreadyDeclared = $currentGame && filled($currentGame->winning_side);
 
-        $statusColor = match ($status) {
+        $displayStatus = $alreadyDeclared ? 'declared' : $status;
+
+        $statusColor = match ($displayStatus) {
             'open' => '#16a34a',
+            'declared' => '#7c3aed',
             'waiting' => '#d97706',
             'closed' => '#2563eb',
             'ended' => '#dc2626',
@@ -14,8 +18,9 @@
             default => '#64748b',
         };
 
-        $statusBg = match ($status) {
+        $statusBg = match ($displayStatus) {
             'open' => '#dcfce7',
+            'declared' => '#f3e8ff',
             'waiting' => '#fef3c7',
             'closed' => '#dbeafe',
             'ended' => '#fee2e2',
@@ -102,7 +107,7 @@
                     </h1>
 
                     <p class="mt-3 max-w-4xl text-sm font-bold leading-6 text-white/80">
-                        Create game rooms, click a room to enter it, then start betting, close betting, end game, and declare result.
+                        Start → Bet → Declare → Start again. End Game hides the room.
                     </p>
                 </div>
 
@@ -215,16 +220,6 @@
                             >{{ old('video_url') }}</textarea>
                         </div>
 
-                        <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                            <p class="text-sm font-black text-slate-950">
-                                Commission is auto-computed.
-                            </p>
-
-                            <p class="mt-1 text-xs font-bold leading-5 text-slate-500">
-                                5% total commission: 3% company and 2% agent.
-                            </p>
-                        </div>
-
                         <button class="h-12 w-full rounded-2xl bg-blue-600 text-sm font-black uppercase tracking-wide text-white shadow-lg shadow-blue-600/20 transition hover:-translate-y-0.5 hover:bg-blue-700">
                             Create Game Room
                         </button>
@@ -252,9 +247,12 @@
                         @forelse($gameList as $game)
                             @php
                                 $gameStatus = strtolower($game->status ?? 'waiting');
+                                $gameDeclared = filled($game->winning_side);
+                                $gameDisplayStatus = $gameDeclared ? 'declared' : $gameStatus;
 
-                                $gameStatusClass = match ($gameStatus) {
+                                $gameStatusClass = match ($gameDisplayStatus) {
                                     'open' => 'bg-green-100 text-green-700',
+                                    'declared' => 'bg-violet-100 text-violet-700',
                                     'waiting' => 'bg-yellow-100 text-yellow-700',
                                     'closed' => 'bg-blue-100 text-blue-700',
                                     'settled' => 'bg-violet-100 text-violet-700',
@@ -286,7 +284,7 @@
                                             </span>
 
                                             <span class="rounded-full px-3 py-1 text-[10px] font-black uppercase {{ $gameStatusClass }}">
-                                                {{ $gameStatus }}
+                                                {{ $gameDisplayStatus }}
                                             </span>
                                         </div>
                                     </div>
@@ -318,7 +316,7 @@
                             </h2>
 
                             <p class="mt-3 text-sm font-bold leading-6 text-slate-500">
-                                Click any room from the list on the left. Ended rooms are hidden, but declared rooms stay visible.
+                                Click any room from the list on the left.
                             </p>
                         </div>
                     </section>
@@ -347,9 +345,15 @@
                                 class="inline-flex w-fit items-center justify-center rounded-full px-3 py-2 text-xs font-black uppercase"
                                 style="background:{{ $statusBg }}; color:{{ $statusColor }};"
                             >
-                                {{ strtoupper($currentGame->status) }}
+                                {{ strtoupper($displayStatus) }}
                             </span>
                         </div>
+
+                        @if($alreadyDeclared)
+                            <div class="mt-4 rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3 text-sm font-extrabold text-violet-800">
+                                Result declared: {{ strtoupper($currentGame->winning_side) }}. Betting is locked. Click Start This Room to begin a new round.
+                            </div>
+                        @endif
 
                         <div class="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                             @foreach($cards as $card)
@@ -400,23 +404,50 @@
                         </div>
 
                         <div class="mt-5 grid gap-3 lg:grid-cols-[1fr_1fr_1fr_2fr]">
+                            @php
+                                $alreadyDeclared = filled($currentGame->winning_side);
+
+                                $canStart = $currentGame->status !== 'ended'
+                                    && (
+                                        $currentGame->status !== 'open'
+                                        || $alreadyDeclared
+                                    );
+
+                                $canClose = $currentGame->status === 'open'
+                                    && !$alreadyDeclared;
+
+                                $canEnd = $currentGame->status !== 'ended';
+
+                                $canDeclare = in_array($currentGame->status, ['open', 'closed'])
+                                    && !$alreadyDeclared;
+                            @endphp
+
                             <form method="POST" action="{{ route('admin.games.start', $currentGame) }}">
                                 @csrf
-                                <button class="h-12 w-full rounded-2xl bg-green-600 text-xs font-black uppercase tracking-wide text-white transition hover:-translate-y-0.5 hover:bg-green-700">
+                                <button
+                                    class="h-12 w-full rounded-2xl bg-green-600 text-xs font-black uppercase tracking-wide text-white transition hover:-translate-y-0.5 hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                    {{ !$canStart ? 'disabled' : '' }}
+                                >
                                     Start This Room
                                 </button>
                             </form>
 
                             <form method="POST" action="{{ route('admin.games.close', $currentGame) }}">
                                 @csrf
-                                <button class="h-12 w-full rounded-2xl bg-orange-500 text-xs font-black uppercase tracking-wide text-white transition hover:-translate-y-0.5 hover:bg-orange-600">
+                                <button
+                                    class="h-12 w-full rounded-2xl bg-orange-500 text-xs font-black uppercase tracking-wide text-white transition hover:-translate-y-0.5 hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-50"
+                                    {{ !$canClose ? 'disabled' : '' }}
+                                >
                                     Close Betting
                                 </button>
                             </form>
 
                             <form method="POST" action="{{ route('admin.games.end', $currentGame) }}">
                                 @csrf
-                                <button class="h-12 w-full rounded-2xl bg-slate-950 text-xs font-black uppercase tracking-wide text-white transition hover:-translate-y-0.5 hover:bg-slate-800">
+                                <button
+                                    class="h-12 w-full rounded-2xl bg-slate-950 text-xs font-black uppercase tracking-wide text-white transition hover:-translate-y-0.5 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                                    {{ !$canEnd ? 'disabled' : '' }}
+                                >
                                     End Game
                                 </button>
                             </form>
@@ -426,7 +457,8 @@
 
                                 <select
                                     name="winning_side"
-                                    class="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-950 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                                    class="h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-950 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                    {{ !$canDeclare ? 'disabled' : '' }}
                                 >
                                     <option value="meron">Meron</option>
                                     <option value="wala">Wala</option>
@@ -434,7 +466,10 @@
                                     <option value="cancelled">Cancelled</option>
                                 </select>
 
-                                <button class="h-12 rounded-2xl bg-yellow-400 px-6 text-xs font-black uppercase tracking-wide text-slate-950 transition hover:-translate-y-0.5 hover:bg-yellow-300">
+                                <button
+                                    class="h-12 rounded-2xl bg-yellow-400 px-6 text-xs font-black uppercase tracking-wide text-slate-950 transition hover:-translate-y-0.5 hover:bg-yellow-300 disabled:cursor-not-allowed disabled:opacity-50"
+                                    {{ !$canDeclare ? 'disabled' : '' }}
+                                >
                                     Declare
                                 </button>
                             </form>
@@ -491,6 +526,7 @@
     <script>
         document.addEventListener('DOMContentLoaded', function () {
             const selectedGameId = @json($hasSelectedGame ? $selectedGameId : null);
+            const indexUrl = @json(route('admin.games.index'));
             const liveUrl = @json(route('admin.games.live')) + (selectedGameId ? '?game_id=' + encodeURIComponent(selectedGameId) : '');
 
             const money = (value) => {
@@ -513,20 +549,24 @@
                 });
             };
 
-            const statusStyle = (status) => {
-                switch (status) {
+            const statusStyle = (status, winningSide = null) => {
+                if (winningSide) {
+                    return { label: 'DECLARED', bg: '#f3e8ff', color: '#7c3aed' };
+                }
+
+                switch (String(status || '').toLowerCase()) {
                     case 'open':
-                        return { bg: '#dcfce7', color: '#16a34a' };
+                        return { label: 'OPEN', bg: '#dcfce7', color: '#16a34a' };
                     case 'waiting':
-                        return { bg: '#fef3c7', color: '#d97706' };
+                        return { label: 'WAITING', bg: '#fef3c7', color: '#d97706' };
                     case 'closed':
-                        return { bg: '#dbeafe', color: '#2563eb' };
+                        return { label: 'CLOSED', bg: '#dbeafe', color: '#2563eb' };
                     case 'ended':
-                        return { bg: '#fee2e2', color: '#dc2626' };
+                        return { label: 'ENDED', bg: '#fee2e2', color: '#dc2626' };
                     case 'settled':
-                        return { bg: '#f3e8ff', color: '#7c3aed' };
+                        return { label: 'SETTLED', bg: '#f3e8ff', color: '#7c3aed' };
                     default:
-                        return { bg: '#f1f5f9', color: '#64748b' };
+                        return { label: 'NO GAME', bg: '#f1f5f9', color: '#64748b' };
                 }
             };
 
@@ -590,7 +630,7 @@
                     const data = await response.json();
 
                     if (!data.has_game && selectedGameId) {
-                        window.location.href = @json(route('admin.games.index'));
+                        window.location.href = indexUrl;
                         return;
                     }
 
@@ -608,13 +648,11 @@
                         setAll('wala_odds', odds(data.game.wala_odds));
                         setAll('draw_odds', odds(data.game.draw_odds));
 
-                        const status = String(data.game.status || 'no_game').toLowerCase();
+                        const style = statusStyle(data.game.status, data.game.winning_side);
                         const statusEl = document.querySelector('[data-live="game_status"]');
 
                         if (statusEl) {
-                            const style = statusStyle(status);
-
-                            statusEl.textContent = status.toUpperCase();
+                            statusEl.textContent = style.label;
                             statusEl.style.background = style.bg;
                             statusEl.style.color = style.color;
                         }

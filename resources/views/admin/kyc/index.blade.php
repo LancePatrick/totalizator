@@ -431,59 +431,81 @@
                     </thead>
 
                     <tbody>
-                        @forelse($kycs as $kyc)
+                        @forelse($kycUsers as $player)
                             @php
-                                $status = strtolower($kyc->status ?? 'default');
+                                $status = strtolower($player->kyc_status ?? 'default');
 
                                 if (!in_array($status, ['approved', 'pending', 'rejected'])) {
                                     $status = 'default';
                                 }
+
+                                $statusLabel = match ($status) {
+                                    'approved' => 'Approved',
+                                    'pending' => 'Pending',
+                                    'rejected' => 'Rejected',
+                                    default => 'Not Submitted',
+                                };
                             @endphp
 
                             <tr>
                                 <td>
                                     <p class="akyc-player-name">
-                                        {{ $kyc->user->name }}
+                                        {{ $player->name }}
                                     </p>
 
                                     <p class="akyc-muted">
-                                        {{ $kyc->user->email }}
-                                    </p>
-                                </td>
-
-                                <td>
-                                    <p class="akyc-strong">
-                                        {{ $kyc->full_name }}
-                                    </p>
-                                </td>
-
-                                <td>
-                                    <p class="akyc-strong">
-                                        {{ $kyc->birthdate ? $kyc->birthdate->format('M d, Y') : 'N/A' }}
-                                    </p>
-                                </td>
-
-                                <td>
-                                    <p class="akyc-strong">
-                                        {{ $kyc->id_type }}
+                                        {{ $player->email }}
                                     </p>
 
                                     <p class="akyc-muted">
-                                        {{ $kyc->id_number }}
+                                        Submitted:
+                                        {{ $player->kyc_submitted_at ? $player->kyc_submitted_at->format('M d, Y h:i A') : 'N/A' }}
+                                    </p>
+                                </td>
+
+                                <td>
+                                    <p class="akyc-strong">
+                                        {{ $player->kyc_full_name ?? 'N/A' }}
+                                    </p>
+
+                                    <p class="akyc-muted">
+                                        {{ $player->kyc_address ?? 'No address' }}
+                                    </p>
+                                </td>
+
+                                <td>
+                                    <p class="akyc-strong">
+                                        {{ $player->kyc_birthdate ? $player->kyc_birthdate->format('M d, Y') : 'N/A' }}
+                                    </p>
+                                </td>
+
+                                <td>
+                                    <p class="akyc-strong">
+                                        {{ $player->kyc_valid_id_type ?? 'N/A' }}
+                                    </p>
+
+                                    <p class="akyc-muted">
+                                        {{ $player->kyc_valid_id_number ?? 'N/A' }}
                                     </p>
                                 </td>
 
                                 <td>
                                     <span class="akyc-pill {{ $status }}">
-                                        {{ $kyc->status }}
+                                        {{ $statusLabel }}
                                     </span>
+
+                                    @if($status === 'rejected' && $player->kyc_rejection_reason)
+                                        <p class="akyc-muted" style="color:#dc2626;">
+                                            {{ $player->kyc_rejection_reason }}
+                                        </p>
+                                    @endif
                                 </td>
 
                                 <td>
                                     <div class="akyc-file-list">
-                                        @if($kyc->id_image_path)
+                                        @if($player->kyc_valid_id_image)
                                             <a
-                                                href="{{ asset('storage/' . $kyc->id_image_path) }}"
+                                                href="{{ asset('storage/' . $player->kyc_valid_id_image) }}"
                                                 target="_blank"
                                                 class="akyc-file-btn akyc-file-id"
                                             >
@@ -495,9 +517,9 @@
                                             </div>
                                         @endif
 
-                                        @if($kyc->selfie_image_path)
+                                        @if($player->kyc_selfie_image)
                                             <a
-                                                href="{{ asset('storage/' . $kyc->selfie_image_path) }}"
+                                                href="{{ asset('storage/' . $player->kyc_selfie_image) }}"
                                                 target="_blank"
                                                 class="akyc-file-btn akyc-file-selfie"
                                             >
@@ -512,9 +534,9 @@
                                 </td>
 
                                 <td>
-                                    @if($kyc->status === 'pending')
+                                    @if($status === 'pending')
                                         <div class="akyc-action-stack">
-                                            <form method="POST" action="{{ route('admin.kyc.approve', $kyc) }}">
+                                            <form method="POST" action="{{ route('admin.kyc.approve', $player) }}">
                                                 @csrf
 
                                                 <button class="akyc-btn akyc-btn-approve">
@@ -522,11 +544,11 @@
                                                 </button>
                                             </form>
 
-                                            <form method="POST" action="{{ route('admin.kyc.reject', $kyc) }}" class="akyc-reject-form">
+                                            <form method="POST" action="{{ route('admin.kyc.reject', $player) }}" class="akyc-reject-form">
                                                 @csrf
 
                                                 <input
-                                                    name="admin_notes"
+                                                    name="reason"
                                                     placeholder="Reject reason"
                                                     class="akyc-input"
                                                 >
@@ -541,9 +563,9 @@
                                             Reviewed
                                         </div>
 
-                                        @if($kyc->admin_notes)
+                                        @if($player->kyc_reviewed_at)
                                             <div class="akyc-muted">
-                                                {{ $kyc->admin_notes }}
+                                                {{ $player->kyc_reviewed_at->format('M d, Y h:i A') }}
                                             </div>
                                         @endif
                                     @endif
@@ -568,9 +590,11 @@
                 </table>
             </div>
 
-            <div class="akyc-pagination">
-                {{ $kycs->links() }}
-            </div>
+            @if(method_exists($kycUsers, 'links'))
+                <div class="akyc-pagination">
+                    {{ $kycUsers->links() }}
+                </div>
+            @endif
         </section>
     </div>
 </x-layouts.app>

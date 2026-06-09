@@ -25,6 +25,7 @@ use App\Http\Controllers\Player\PlayerDashboardController;
 use App\Http\Controllers\Player\PlayerGameController;
 use App\Http\Controllers\Player\PlayerKycController;
 use App\Http\Controllers\Player\PlayerWalletController;
+use App\Http\Controllers\Player\PlayerAccountStatusController;
 
 Route::get('/', function () {
     if (auth()->check()) {
@@ -48,12 +49,6 @@ Route::middleware(['auth'])->group(function () {
         Route::get('/dashboard', [AdminDashboardController::class, 'index'])
             ->name('dashboard');
 
-        /*
-        |--------------------------------------------------------------------------
-        | Admin Agents
-        |--------------------------------------------------------------------------
-        */
-
         Route::get('/agents', [AdminAgentController::class, 'index'])
             ->name('agents.index');
 
@@ -62,12 +57,6 @@ Route::middleware(['auth'])->group(function () {
 
         Route::post('/agents/{agent}/deactivate', [AdminAgentController::class, 'deactivate'])
             ->name('agents.deactivate');
-
-        /*
-        |--------------------------------------------------------------------------
-        | Admin Players
-        |--------------------------------------------------------------------------
-        */
 
         Route::get('/players', [AdminPlayerController::class, 'index'])
             ->name('players.index');
@@ -78,11 +67,11 @@ Route::middleware(['auth'])->group(function () {
         Route::post('/players/{player}/deactivate', [AdminPlayerController::class, 'deactivate'])
             ->name('players.deactivate');
 
-        /*
-        |--------------------------------------------------------------------------
-        | Admin Game Rooms / Totalizator
-        |--------------------------------------------------------------------------
-        */
+        Route::post('/players/{player}/appeal/approve', [AdminPlayerController::class, 'approveAppeal'])
+            ->name('players.appeal.approve');
+
+        Route::post('/players/{player}/appeal/reject', [AdminPlayerController::class, 'rejectAppeal'])
+            ->name('players.appeal.reject');
 
         Route::get('/games', [AdminGameController::class, 'index'])
             ->name('games.index');
@@ -105,12 +94,6 @@ Route::middleware(['auth'])->group(function () {
         Route::post('/games/{game}/declare', [AdminGameController::class, 'declare'])
             ->name('games.declare');
 
-        /*
-        |--------------------------------------------------------------------------
-        | Admin KYC
-        |--------------------------------------------------------------------------
-        */
-
         Route::get('/kyc', [AdminKycController::class, 'index'])
             ->name('kyc.index');
 
@@ -119,12 +102,6 @@ Route::middleware(['auth'])->group(function () {
 
         Route::post('/kyc/{kyc}/reject', [AdminKycController::class, 'reject'])
             ->name('kyc.reject');
-
-        /*
-        |--------------------------------------------------------------------------
-        | Admin Money Requests / Withdrawals
-        |--------------------------------------------------------------------------
-        */
 
         Route::get('/money-requests', [AdminMoneyRequestController::class, 'index'])
             ->name('money-requests.index');
@@ -141,12 +118,6 @@ Route::middleware(['auth'])->group(function () {
         Route::post('/withdrawals/{withdrawal}/reject', [AdminMoneyRequestController::class, 'rejectWithdrawal'])
             ->name('withdrawals.reject');
 
-        /*
-        |--------------------------------------------------------------------------
-        | Admin Commission Withdrawals
-        |--------------------------------------------------------------------------
-        */
-
         Route::get('/commission-withdrawals', [AdminCommissionWithdrawalController::class, 'index'])
             ->name('commission-withdrawals.index');
 
@@ -156,20 +127,8 @@ Route::middleware(['auth'])->group(function () {
         Route::post('/commission-withdrawals/{commissionWithdrawal}/reject', [AdminCommissionWithdrawalController::class, 'reject'])
             ->name('commission-withdrawals.reject');
 
-        /*
-        |--------------------------------------------------------------------------
-        | Admin Commission Reports
-        |--------------------------------------------------------------------------
-        */
-
         Route::get('/commission-reports', [AdminCommissionReportController::class, 'index'])
             ->name('commission-reports.index');
-
-        /*
-        |--------------------------------------------------------------------------
-        | Admin Reports
-        |--------------------------------------------------------------------------
-        */
 
         Route::get('/reports/games', [AdminReportController::class, 'games'])
             ->name('reports.games');
@@ -182,12 +141,6 @@ Route::middleware(['auth'])->group(function () {
 
         Route::get('/reports/wallet/export', [AdminReportController::class, 'exportWallet'])
             ->name('reports.wallet.export');
-
-        /*
-        |--------------------------------------------------------------------------
-        | Admin Monitoring
-        |--------------------------------------------------------------------------
-        */
 
         Route::get('/monitoring', [AdminMonitoringController::class, 'overview'])
             ->name('monitoring.overview');
@@ -215,12 +168,6 @@ Route::middleware(['auth'])->group(function () {
         Route::get('/dashboard', [AgentDashboardController::class, 'index'])
             ->name('dashboard');
 
-        /*
-        |--------------------------------------------------------------------------
-        | Agent Wallet
-        |--------------------------------------------------------------------------
-        */
-
         Route::get('/wallet', [AgentWalletController::class, 'index'])
             ->name('wallet.index');
 
@@ -229,12 +176,6 @@ Route::middleware(['auth'])->group(function () {
 
         Route::post('/wallet/withdraw', [AgentWalletController::class, 'withdraw'])
             ->name('wallet.withdraw');
-
-        /*
-        |--------------------------------------------------------------------------
-        | Agent Player Requests
-        |--------------------------------------------------------------------------
-        */
 
         Route::get('/requests', [AgentRequestController::class, 'index'])
             ->name('requests.index');
@@ -251,12 +192,6 @@ Route::middleware(['auth'])->group(function () {
         Route::post('/requests/withdrawals/{withdrawal}/reject', [AgentRequestController::class, 'rejectWithdrawal'])
             ->name('requests.withdrawals.reject');
 
-        /*
-        |--------------------------------------------------------------------------
-        | Agent Commissions
-        |--------------------------------------------------------------------------
-        */
-
         Route::get('/commissions', [AgentCommissionController::class, 'index'])
             ->name('commissions.index');
 
@@ -265,12 +200,6 @@ Route::middleware(['auth'])->group(function () {
 
         Route::post('/commissions/withdraw-cash', [AgentCommissionController::class, 'withdrawCash'])
             ->name('commissions.withdraw-cash');
-
-        /*
-        |--------------------------------------------------------------------------
-        | Agent Players
-        |--------------------------------------------------------------------------
-        */
 
         Route::get('/players', [AgentPlayerController::class, 'index'])
             ->name('players.index');
@@ -283,33 +212,17 @@ Route::middleware(['auth'])->group(function () {
     */
 
     Route::prefix('player')->name('player.')->group(function () {
-        Route::get('/dashboard', [PlayerDashboardController::class, 'index'])
-            ->name('dashboard');
+        Route::get('/appeal', [PlayerAccountStatusController::class, 'inactive'])
+            ->name('appeal.index');
 
-        /*
-        |--------------------------------------------------------------------------
-        | Player Game Rooms
-        |--------------------------------------------------------------------------
-        |
-        | Play Game sidebar/button should point to:
-        | route('player.game.index')
-        |
-        */
+        Route::post('/appeal', [PlayerAccountStatusController::class, 'submitAppeal'])
+            ->name('appeal.store');
 
-        Route::get('/game', [PlayerGameController::class, 'index'])
-            ->name('game.index');
+        Route::get('/account/inactive', [PlayerAccountStatusController::class, 'inactive'])
+            ->name('account.inactive');
 
-        Route::get('/game/live', [PlayerGameController::class, 'liveData'])
-            ->name('game.live');
-
-        Route::post('/game/bet', [PlayerGameController::class, 'bet'])
-            ->name('game.bet');
-
-        /*
-        |--------------------------------------------------------------------------
-        | Player KYC
-        |--------------------------------------------------------------------------
-        */
+        Route::post('/account/appeal', [PlayerAccountStatusController::class, 'submitAppeal'])
+            ->name('account.appeal');
 
         Route::get('/kyc', [PlayerKycController::class, 'index'])
             ->name('kyc.index');
@@ -317,20 +230,28 @@ Route::middleware(['auth'])->group(function () {
         Route::post('/kyc', [PlayerKycController::class, 'store'])
             ->name('kyc.store');
 
-        /*
-        |--------------------------------------------------------------------------
-        | Player Wallet
-        |--------------------------------------------------------------------------
-        */
+        Route::middleware(['kyc.approved'])->group(function () {
+            Route::get('/dashboard', [PlayerDashboardController::class, 'index'])
+                ->name('dashboard');
 
-        Route::get('/wallet', [PlayerWalletController::class, 'index'])
-            ->name('wallet.index');
+            Route::get('/game', [PlayerGameController::class, 'index'])
+                ->name('game.index');
 
-        Route::post('/wallet/request-money', [PlayerWalletController::class, 'requestMoney'])
-            ->name('wallet.request-money');
+            Route::get('/game/live', [PlayerGameController::class, 'liveData'])
+                ->name('game.live');
 
-        Route::post('/wallet/withdraw', [PlayerWalletController::class, 'withdraw'])
-            ->name('wallet.withdraw');
+            Route::post('/game/bet', [PlayerGameController::class, 'bet'])
+                ->name('game.bet');
+
+            Route::get('/wallet', [PlayerWalletController::class, 'index'])
+                ->name('wallet.index');
+
+            Route::post('/wallet/request-money', [PlayerWalletController::class, 'requestMoney'])
+                ->name('wallet.request-money');
+
+            Route::post('/wallet/withdraw', [PlayerWalletController::class, 'withdraw'])
+                ->name('wallet.withdraw');
+        });
     });
 });
 

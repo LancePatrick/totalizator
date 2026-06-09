@@ -17,11 +17,9 @@ class AgentRequestController extends Controller
 
         return view('agent.requests.index', [
             'moneyRequests' => MoneyRequest::with('user')
-                ->where(function ($query) use ($agent) {
-                    $query->where('agent_id', $agent->id)
-                        ->orWhereHas('user', function ($userQuery) use ($agent) {
-                            $userQuery->where('agent_id', $agent->id);
-                        });
+                ->whereHas('user', function ($query) use ($agent) {
+                    $query->where('role', 'player')
+                        ->where('agent_id', $agent->id);
                 })
                 ->orderByRaw("CASE WHEN status = 'pending' THEN 0 ELSE 1 END")
                 ->latest()
@@ -29,11 +27,9 @@ class AgentRequestController extends Controller
                 ->get(),
 
             'withdrawals' => WithdrawalRequest::with('user')
-                ->where(function ($query) use ($agent) {
-                    $query->where('agent_id', $agent->id)
-                        ->orWhereHas('user', function ($userQuery) use ($agent) {
-                            $userQuery->where('agent_id', $agent->id);
-                        });
+                ->whereHas('user', function ($query) use ($agent) {
+                    $query->where('role', 'player')
+                        ->where('agent_id', $agent->id);
                 })
                 ->orderByRaw("CASE WHEN status = 'pending' THEN 0 ELSE 1 END")
                 ->latest()
@@ -149,7 +145,9 @@ class AgentRequestController extends Controller
                     throw new \RuntimeException('This money request is already reviewed.');
                 }
 
-                $player = User::where('id', $moneyRequest->user_id)->firstOrFail();
+                $player = User::where('id', $moneyRequest->user_id)
+                    ->lockForUpdate()
+                    ->firstOrFail();
 
                 if ($player->role !== 'player') {
                     throw new \RuntimeException('Only player money requests can be rejected here.');
@@ -204,10 +202,6 @@ class AgentRequestController extends Controller
 
                 if ((int) $player->agent_id !== (int) $agent->id) {
                     throw new \RuntimeException('This player is not assigned to you.');
-                }
-
-                if ((int) $withdrawal->agent_id !== (int) $agent->id) {
-                    throw new \RuntimeException('This withdrawal is not assigned to you.');
                 }
 
                 $amount = (float) $withdrawal->amount;
@@ -276,10 +270,6 @@ class AgentRequestController extends Controller
                     throw new \RuntimeException('This player is not assigned to you.');
                 }
 
-                if ((int) $withdrawal->agent_id !== (int) $agent->id) {
-                    throw new \RuntimeException('This withdrawal is not assigned to you.');
-                }
-
                 $amount = (float) $withdrawal->amount;
 
                 $playerBefore = (float) $player->wallet_balance;
@@ -308,7 +298,7 @@ class AgentRequestController extends Controller
                     'balance_after' => $playerAfter,
                     'reference_type' => WithdrawalRequest::class,
                     'reference_id' => $withdrawal->id,
-                    'description' => 'Withdrawal rejected by agent. Amount returned to player wallet.',
+                    'description' => 'Withdrawal rejected by agent. Amount returned to wallet.',
                 ]);
             });
 

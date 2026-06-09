@@ -14,124 +14,179 @@ class PlayerWalletController extends Controller
 {
     public function index()
     {
-        $player = auth()->user();
+        if ($redirect = $this->blockIfKycNotApproved()) {
+            return $redirect;
+        }
+
+        $user = auth()->user();
+
+        $transactions = WalletTransaction::where('user_id', $user->id)
+            ->latest()
+            ->take(50)
+            ->get();
+
+        $moneyRequests = MoneyRequest::where('user_id', $user->id)
+            ->latest()
+            ->take(20)
+            ->get();
+
+        $withdrawals = WithdrawalRequest::where('user_id', $user->id)
+            ->latest()
+            ->take(20)
+            ->get();
 
         return view('player.wallet.index', [
-            'moneyRequests' => MoneyRequest::where('user_id', $player->id)
-                ->latest()
-                ->take(30)
-                ->get(),
+            'user' => $user,
+            'transactions' => $transactions,
+            'moneyRequests' => $moneyRequests,
 
-            'withdrawals' => WithdrawalRequest::where('user_id', $player->id)
-                ->latest()
-                ->take(30)
-                ->get(),
+            // important: ginagamit ito ng blade mo
+            'withdrawals' => $withdrawals,
+
+            // extra alias kung may ibang part ng blade na ito ang gamit
+            'withdrawalRequests' => $withdrawals,
         ]);
     }
 
     public function requestMoney(Request $request)
     {
+        if ($redirect = $this->blockIfKycNotApproved()) {
+            return $redirect;
+        }
+
         $data = $request->validate([
             'amount' => ['required', 'numeric', 'min:1'],
-            'payment_method' => ['nullable', 'string', 'max:100'],
-            'reference_number' => ['nullable', 'string', 'max:150'],
-            'proof_image' => ['nullable', 'image', 'max:4096'],
             'notes' => ['nullable', 'string', 'max:1000'],
         ]);
 
-        $player = auth()->user();
+        $user = auth()->user();
 
-        $proofPath = null;
-
-        if ($request->hasFile('proof_image')) {
-            $proofPath = $request->file('proof_image')
-                ->store('proofs/player-money-requests', 'public');
+        if ($user->role !== 'player') {
+            return back()->withErrors([
+                'request' => 'Only players can send money requests here.',
+            ]);
         }
 
         MoneyRequest::create([
-            'user_id' => $player->id,
-            'agent_id' => $player->agent_id,
+            'user_id' => $user->id,
+            'agent_id' => $user->agent_id,
             'admin_id' => null,
             'amount' => $data['amount'],
-            'payment_method' => $data['payment_method'] ?? null,
-            'reference_number' => $data['reference_number'] ?? null,
-            'proof_image_path' => $proofPath,
-            'notes' => $data['notes'] ?? null,
             'status' => 'pending',
+            'notes' => $data['notes'] ?? null,
         ]);
 
-        return back()->with('success', 'Money request submitted to your agent.');
+        return back()->with('success', 'Money request submitted successfully.');
     }
 
     public function withdraw(Request $request)
     {
+        if ($redirect = $this->blockIfKycNotApproved()) {
+            return $redirect;
+        }
+
         $data = $request->validate([
             'amount' => ['required', 'numeric', 'min:1'],
-            'payment_method' => ['required', 'string', 'max:100'],
-            'account_name' => ['required', 'string', 'max:150'],
-            'account_number' => ['required', 'string', 'max:150'],
             'notes' => ['nullable', 'string', 'max:1000'],
         ]);
 
-        try {
-            DB::transaction(function () use ($data) {
-                $player = User::where('id', auth()->id())
-                    ->lockForUpdate()
-                    ->firstOrFail();
+        return DB::transaction(function () use ($data) {
+            $user = User::whereKey(auth()->id())
+                ->lockForUpdate()
+                ->firstOrFail();
 
-                if ($player->role !== 'player') {
-                    throw new \RuntimeException('Only players can request withdrawal here.');
-                }
-
-                if (!$player->agent_id) {
-                    throw new \RuntimeException('You do not have an assigned agent.');
-                }
-
-                $amount = (float) $data['amount'];
-
-                if ($amount > (float) $player->wallet_balance) {
-                    throw new \RuntimeException('You can only withdraw up to your current wallet balance.');
-                }
-
-                $playerBefore = (float) $player->wallet_balance;
-                $playerAfter = $playerBefore - $amount;
-
-                $player->update([
-                    'wallet_balance' => $playerAfter,
+            if ($user->role !== 'player') {
+                return back()->withErrors([
+                    'request' => 'Only players can send withdrawal requests here.',
                 ]);
+            }
 
-                $withdrawal = WithdrawalRequest::create([
-                    'user_id' => $player->id,
-                    'player_id' => $player->id,
-                    'agent_id' => $player->agent_id,
-                    'admin_id' => null,
-                    'amount' => $amount,
-                    'payment_method' => $data['payment_method'],
-                    'account_name' => $data['account_name'],
-                    'account_number' => $data['account_number'],
-                    'notes' => $data['notes'] ?? null,
-                    'status' => 'pending',
+            if ($user->kyc_status !== 'approved') {
+                return redirect()
+                    ->route('player.kyc.index')
+                    ->withErrors([
+                        'kyc' => 'You need to complete KYC verification before using wallet features.',
+                    ]);
+            }
+
+            $amount = (float) $data['amount'];
+
+            if ((float) $user->wallet_balance < $amount) {
+                return back()->withErrors([
+                    'amount' => 'Insufficient wallet balance.',
                 ]);
+            }
 
-                WalletTransaction::create([
-                    'user_id' => $player->id,
-                    'admin_id' => null,
-                    'type' => 'player_withdrawal_request',
-                    'direction' => 'debit',
-                    'amount' => $amount,
-                    'balance_before' => $playerBefore,
-                    'balance_after' => $playerAfter,
-                    'reference_type' => WithdrawalRequest::class,
-                    'reference_id' => $withdrawal->id,
-                    'description' => 'Player withdrawal request submitted. Amount deducted while waiting for agent approval.',
-                ]);
-            });
+            $balanceBefore = (float) $user->wallet_balance;
+            $balanceAfter = $balanceBefore - $amount;
 
-            return back()->with('success', 'Withdrawal request submitted. Amount deducted while waiting for agent approval.');
-        } catch (\Throwable $e) {
-            return back()->withErrors([
-                'amount' => $e->getMessage(),
+            $user->update([
+                'wallet_balance' => $balanceAfter,
             ]);
+
+            $withdrawal = WithdrawalRequest::create([
+                'user_id' => $user->id,
+                'player_id' => $user->id,
+                'agent_id' => $user->agent_id,
+                'admin_id' => null,
+                'amount' => $amount,
+                'status' => 'pending',
+                'notes' => $data['notes'] ?? null,
+            ]);
+
+            WalletTransaction::create([
+                'user_id' => $user->id,
+                'admin_id' => null,
+                'type' => 'withdrawal_request',
+                'direction' => 'debit',
+                'amount' => $amount,
+                'balance_before' => $balanceBefore,
+                'balance_after' => $balanceAfter,
+                'reference_type' => WithdrawalRequest::class,
+                'reference_id' => $withdrawal->id,
+                'description' => 'Withdrawal request submitted.',
+            ]);
+
+            return back()->with('success', 'Withdrawal request submitted successfully.');
+        });
+    }
+
+    public function moneyRequest(Request $request)
+    {
+        return $this->requestMoney($request);
+    }
+
+    public function withdrawalRequest(Request $request)
+    {
+        return $this->withdraw($request);
+    }
+
+    public function cashIn(Request $request)
+    {
+        return $this->requestMoney($request);
+    }
+
+    public function cashOut(Request $request)
+    {
+        return $this->withdraw($request);
+    }
+
+    private function blockIfKycNotApproved()
+    {
+        $user = auth()->user();
+
+        if (!$user) {
+            return redirect()->route('login');
         }
+
+        if ($user->role === 'player' && $user->kyc_status !== 'approved') {
+            return redirect()
+                ->route('player.kyc.index')
+                ->withErrors([
+                    'kyc' => 'You need to complete KYC verification before using wallet, cash in, cash out, and request features.',
+                ]);
+        }
+
+        return null;
     }
 }

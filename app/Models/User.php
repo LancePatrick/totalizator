@@ -22,10 +22,41 @@ class User extends Authenticatable
         'wallet_balance',
         'commission_balance',
         'is_active',
-        'kyc_status',
         'phone',
         'location',
         'last_login_at',
+
+        /*
+        |--------------------------------------------------------------------------
+        | Account Deactivation / Appeal Fields
+        |--------------------------------------------------------------------------
+        */
+        'deactivation_reason',
+        'deactivated_at',
+        'deactivated_by',
+        'appeal_reason',
+        'appeal_status',
+        'appeal_submitted_at',
+        'appeal_reviewed_at',
+        'appeal_reviewed_by',
+
+        /*
+        |--------------------------------------------------------------------------
+        | KYC Fields
+        |--------------------------------------------------------------------------
+        */
+        'kyc_status',
+        'kyc_rejection_reason',
+        'kyc_full_name',
+        'kyc_birthdate',
+        'kyc_address',
+        'kyc_valid_id_type',
+        'kyc_valid_id_number',
+        'kyc_valid_id_image',
+        'kyc_selfie_image',
+        'kyc_submitted_at',
+        'kyc_reviewed_at',
+        'kyc_reviewed_by',
     ];
 
     protected $hidden = [
@@ -44,6 +75,14 @@ class User extends Authenticatable
             'commission_balance' => 'decimal:2',
             'is_active' => 'boolean',
             'last_login_at' => 'datetime',
+
+            'deactivated_at' => 'datetime',
+            'appeal_submitted_at' => 'datetime',
+            'appeal_reviewed_at' => 'datetime',
+
+            'kyc_birthdate' => 'date',
+            'kyc_submitted_at' => 'datetime',
+            'kyc_reviewed_at' => 'datetime',
         ];
     }
 
@@ -66,6 +105,63 @@ class User extends Authenticatable
     public function isPlayer(): bool
     {
         return $this->role === 'player';
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | KYC Helpers
+    |--------------------------------------------------------------------------
+    */
+
+    public function isKycApproved(): bool
+    {
+        return $this->kyc_status === 'approved';
+    }
+
+    public function isKycPending(): bool
+    {
+        return $this->kyc_status === 'pending';
+    }
+
+    public function isKycRejected(): bool
+    {
+        return $this->kyc_status === 'rejected';
+    }
+
+    public function needsKyc(): bool
+    {
+        return $this->isPlayer() && $this->kyc_status !== 'approved';
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Account Status Helpers
+    |--------------------------------------------------------------------------
+    */
+
+    public function isAccountActive(): bool
+    {
+        return (bool) $this->is_active;
+    }
+
+    public function isAccountInactive(): bool
+    {
+        return !$this->isAccountActive();
+    }
+
+    public function hasPendingAppeal(): bool
+    {
+        return $this->appeal_status === 'pending';
+    }
+
+    public function appealLabel(): string
+    {
+        return match ($this->appeal_status) {
+            'pending' => 'Pending',
+            'approved' => 'Approved',
+            'rejected' => 'Rejected',
+            default => 'No Appeal',
+        };
     }
 
     /*
@@ -129,6 +225,16 @@ class User extends Authenticatable
     public function players()
     {
         return $this->hasMany(User::class, 'agent_id');
+    }
+
+    public function deactivatedBy()
+    {
+        return $this->belongsTo(User::class, 'deactivated_by');
+    }
+
+    public function appealReviewedBy()
+    {
+        return $this->belongsTo(User::class, 'appeal_reviewed_by');
     }
 
     /*

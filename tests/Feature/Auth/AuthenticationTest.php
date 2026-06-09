@@ -1,67 +1,56 @@
 <?php
 
-use App\Models\User;
-use Laravel\Fortify\Features;
+namespace App\Http\Controllers\Auth;
 
-test('login screen can be rendered', function () {
-    $response = $this->get(route('login'));
+use App\Http\Controllers\Controller;
+use App\Http\Requests\Auth\LoginRequest;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\View\View;
 
-    $response->assertOk();
-});
+class AuthenticatedSessionController extends Controller
+{
+    public function create(): View
+    {
+        return view('auth.login');
+    }
 
-test('users can authenticate using the login screen', function () {
-    $user = User::factory()->create();
+    public function store(LoginRequest $request): RedirectResponse
+    {
+        $request->authenticate();
 
-    $response = $this->post(route('login.store'), [
-        'email' => $user->email,
-        'password' => 'password',
-    ]);
+        $request->session()->regenerate();
 
-    $response
-        ->assertSessionHasNoErrors()
-        ->assertRedirect(route('dashboard', absolute: false));
+        $user = Auth::user();
 
-    $this->assertAuthenticated();
-});
+        /*
+        |--------------------------------------------------------------------------
+        | Inactive Player Appeal Redirect
+        |--------------------------------------------------------------------------
+        | Huwag i-logout ang inactive player.
+        | Kailangan naka-login siya para makita niya ang appeal page.
+        |--------------------------------------------------------------------------
+        */
+        if ($user && $user->role === 'player' && !$user->is_active) {
+            return redirect()->route('player.appeal.index');
+        }
 
-test('users can not authenticate with invalid password', function () {
-    $user = User::factory()->create();
+        return redirect()->intended(route('dashboard', absolute: false));
+    }
 
-    $response = $this->post(route('login.store'), [
-        'email' => $user->email,
-        'password' => 'wrong-password',
-    ]);
+    public function destroy(Request $request): RedirectResponse
+    {
+        Auth::guard('web')->logout();
 
-    $response->assertSessionHasErrorsIn('email');
+        $request->session()->invalidate();
 
-    $this->assertGuest();
-});
+        $request->session()->regenerateToken();
 
-test('users with two factor enabled are redirected to two factor challenge', function () {
-    $this->skipUnlessFortifyHas(Features::twoFactorAuthentication());
+        if (route('home', [], false)) {
+            return redirect()->route('home');
+        }
 
-    Features::twoFactorAuthentication([
-        'confirm' => true,
-        'confirmPassword' => true,
-    ]);
-
-    $user = User::factory()->withTwoFactor()->create();
-
-    $response = $this->post(route('login.store'), [
-        'email' => $user->email,
-        'password' => 'password',
-    ]);
-
-    $response->assertRedirect(route('two-factor.login'));
-    $this->assertGuest();
-});
-
-test('users can logout', function () {
-    $user = User::factory()->create();
-
-    $response = $this->actingAs($user)->post(route('logout'));
-
-    $response->assertRedirect(route('home'));
-
-    $this->assertGuest();
-});
+        return redirect('/');
+    }
+}

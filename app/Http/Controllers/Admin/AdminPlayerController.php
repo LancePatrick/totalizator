@@ -42,6 +42,9 @@ class AdminPlayerController extends Controller
             ->when($request->filled('kyc_status'), function ($query) use ($request) {
                 $query->where('kyc_status', $request->kyc_status);
             })
+            ->when($request->filled('appeal_status'), function ($query) use ($request) {
+                $query->where('appeal_status', $request->appeal_status);
+            })
             ->when($request->filled('date_from'), function ($query) use ($request) {
                 $query->whereDate('created_at', '>=', $request->date_from);
             })
@@ -60,23 +63,99 @@ class AdminPlayerController extends Controller
 
     public function activate(User $player)
     {
+        abort_if(auth()->user()->role !== 'admin', 403);
         abort_if($player->role !== 'player', 404);
 
         $player->update([
             'is_active' => true,
+
+            'deactivation_reason' => null,
+            'deactivated_at' => null,
+            'deactivated_by' => null,
+
+            'appeal_status' => 'approved',
+            'appeal_admin_note' => 'Account activated by admin.',
+            'appeal_reviewed_at' => now(),
+            'appeal_reviewed_by' => auth()->id(),
         ]);
 
-        return back()->with('success', 'Player activated.');
+        return back()->with('success', 'Player activated successfully.');
     }
 
-    public function deactivate(User $player)
+    public function deactivate(Request $request, User $player)
     {
+        abort_if(auth()->user()->role !== 'admin', 403);
         abort_if($player->role !== 'player', 404);
+
+        $data = $request->validate([
+            'deactivation_reason' => ['required', 'string', 'min:3', 'max:1000'],
+        ]);
 
         $player->update([
             'is_active' => false,
+
+            'deactivation_reason' => $data['deactivation_reason'],
+            'deactivated_at' => now(),
+            'deactivated_by' => auth()->id(),
+
+            'appeal_message' => null,
+            'appeal_proof' => null,
+            'appeal_status' => null,
+            'appeal_admin_note' => null,
+            'appeal_submitted_at' => null,
+            'appeal_reviewed_at' => null,
+            'appeal_reviewed_by' => null,
         ]);
 
-        return back()->with('success', 'Player deactivated.');
+        return back()->with('success', 'Player deactivated successfully.');
+    }
+
+    public function approveAppeal(User $player)
+    {
+        abort_if(auth()->user()->role !== 'admin', 403);
+        abort_if($player->role !== 'player', 404);
+
+        $player->update([
+            'is_active' => true,
+
+            'deactivation_reason' => null,
+            'deactivated_at' => null,
+            'deactivated_by' => null,
+
+            'appeal_status' => 'approved',
+            'appeal_admin_note' => 'Appeal approved. Account activated again.',
+            'appeal_reviewed_at' => now(),
+            'appeal_reviewed_by' => auth()->id(),
+        ]);
+
+        return back()->with('success', 'Appeal approved. Player activated successfully.');
+    }
+
+    public function rejectAppeal(Request $request, User $player)
+    {
+        abort_if(auth()->user()->role !== 'admin', 403);
+        abort_if($player->role !== 'player', 404);
+
+        $data = $request->validate([
+            'appeal_admin_note' => ['nullable', 'string', 'max:1000'],
+            'appeal_reject_reason' => ['nullable', 'string', 'max:1000'],
+        ]);
+
+        $reason = $data['appeal_admin_note']
+            ?? $data['appeal_reject_reason']
+            ?? 'Your appeal was rejected by admin. Please submit valid proof.';
+
+        $player->update([
+            'is_active' => false,
+
+            'appeal_status' => 'rejected',
+            'appeal_admin_note' => $reason,
+            'appeal_reviewed_at' => now(),
+            'appeal_reviewed_by' => auth()->id(),
+
+            'deactivation_reason' => $reason,
+        ]);
+
+        return back()->with('success', 'Player appeal rejected.');
     }
 }

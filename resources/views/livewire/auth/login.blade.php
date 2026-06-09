@@ -78,6 +78,20 @@
         </div>
 
         @if($errors->any())
+            @php
+                $hasInactiveError = collect($errors->all())->contains(function ($error) {
+                    return str_contains(strtolower($error), 'inactive');
+                });
+
+                $appealUrl = null;
+
+                if (Route::has('player.appeal.index')) {
+                    $appealUrl = route('player.appeal.index');
+                } elseif (Route::has('player.account.inactive')) {
+                    $appealUrl = route('player.account.inactive');
+                }
+            @endphp
+
             <div
                 style="
                     margin-top:18px;
@@ -88,11 +102,52 @@
                     border:1px solid #fecaca;
                     font-size:13px;
                     font-weight:800;
+                    line-height:1.6;
                 "
             >
                 @foreach($errors->all() as $error)
                     <div>{{ $error }}</div>
                 @endforeach
+
+                @if($hasInactiveError && $appealUrl)
+                    <div style="margin-top:12px;">
+                        <a
+                            href="{{ $appealUrl }}"
+                            style="
+                                width:100%;
+                                min-height:44px;
+                                border-radius:13px;
+                                background:#dc2626;
+                                color:#ffffff;
+                                display:flex;
+                                align-items:center;
+                                justify-content:center;
+                                text-align:center;
+                                font-size:12px;
+                                font-weight:950;
+                                text-decoration:none;
+                                text-transform:uppercase;
+                                letter-spacing:.06em;
+                                box-shadow:0 10px 20px rgba(220,38,38,.22);
+                            "
+                        >
+                            Submit Appeal
+                        </a>
+                    </div>
+
+                    <p
+                        style="
+                            margin:10px 0 0;
+                            color:#7f1d1d;
+                            font-size:12px;
+                            font-weight:700;
+                            line-height:1.5;
+                            text-align:center;
+                        "
+                    >
+                        Click the button above to explain your concern and submit proof for account reactivation.
+                    </p>
+                @endif
             </div>
         @endif
 

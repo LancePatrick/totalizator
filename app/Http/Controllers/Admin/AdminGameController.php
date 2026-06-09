@@ -22,14 +22,14 @@ class AdminGameController extends Controller
 
         if ($request->filled('game_id')) {
             $currentGame = GameRound::whereKey($request->game_id)
-                ->whereIn('status', ['waiting', 'open', 'closed', 'ended'])
+                ->whereIn('status', ['waiting', 'open', 'closed', 'settled'])
                 ->first();
         }
 
         if (!$currentGame && $request->filled('game_id')) {
             return redirect()
                 ->route('admin.games.index')
-                ->withErrors(['game' => 'Selected game room is already settled or not available anymore.']);
+                ->withErrors(['game' => 'Selected game room was not found or already ended.']);
         }
 
         return view('admin.games.index', [
@@ -45,7 +45,7 @@ class AdminGameController extends Controller
 
         if ($request->filled('game_id')) {
             $currentGame = GameRound::whereKey($request->game_id)
-                ->whereIn('status', ['waiting', 'open', 'closed', 'ended'])
+                ->whereIn('status', ['waiting', 'open', 'closed', 'settled'])
                 ->first();
         }
 
@@ -56,6 +56,7 @@ class AdminGameController extends Controller
                     'title' => $game->title ?? $game->round_name ?? 'Game Room',
                     'round_code' => $game->round_code ?? $game->round_number ?? $game->id,
                     'status' => $game->status,
+                    'winning_side' => $game->winning_side,
                     'total_pool' => (float) ($game->total_pool ?? 0),
                     'created_at' => optional($game->created_at)->format('M d, Y h:i A'),
                 ];
@@ -99,6 +100,7 @@ class AdminGameController extends Controller
                 'title' => $currentGame->title ?? $currentGame->round_name ?? 'Game Room',
                 'round_code' => $currentGame->round_code ?? $currentGame->round_number ?? $currentGame->id,
                 'status' => $currentGame->status,
+                'winning_side' => $currentGame->winning_side,
                 'video_url' => $currentGame->video_url,
 
                 'meron_total' => (float) ($currentGame->meron_total ?? 0),
@@ -110,8 +112,6 @@ class AdminGameController extends Controller
                 'meron_odds' => (float) ($currentGame->meron_odds ?? 0),
                 'wala_odds' => (float) ($currentGame->wala_odds ?? 0),
                 'draw_odds' => (float) ($currentGame->draw_odds ?? 0),
-
-                'winning_side' => $currentGame->winning_side,
             ],
             'games' => $gameList,
             'logrohan' => $logrohan,
@@ -127,14 +127,27 @@ class AdminGameController extends Controller
         ]);
 
         $payload = [
+            'created_by' => auth()->id(),
+
             'title' => $data['game_title'],
             'round_name' => $data['game_title'],
+
             'round_code' => $data['round_number'] ?? null,
             'round_number' => $data['round_number'] ?? null,
+
             'video_url' => $data['video_url'] ?? null,
 
             'status' => 'waiting',
             'winning_side' => null,
+
+            'commission_rate' => 5,
+            'commission_amount' => 0,
+            'admin_income' => 0,
+
+            'company_commission_rate' => 3,
+            'agent_commission_rate' => 2,
+            'company_commission_amount' => 0,
+            'agent_commission_amount' => 0,
 
             'meron_total' => 0,
             'wala_total' => 0,
@@ -146,15 +159,12 @@ class AdminGameController extends Controller
             'wala_odds' => 0,
             'draw_odds' => 0,
 
-            'commission_rate' => 5,
-            'commission_amount' => 0,
-            'company_commission_rate' => 3,
-            'agent_commission_rate' => 2,
-            'company_commission_amount' => 0,
-            'agent_commission_amount' => 0,
-
             'payout_total' => 0,
-            'admin_income' => 0,
+
+            'started_at' => null,
+            'closed_at' => null,
+            'ended_at' => null,
+            'settled_at' => null,
         ];
 
         $game = GameRound::create($this->onlyExistingColumns('game_rounds', $payload));
@@ -175,25 +185,39 @@ class AdminGameController extends Controller
 
     public function start(GameRound $game)
     {
-        if ($game->status === 'open') {
+        if ($game->status === 'ended') {
+            return redirect()
+                ->route('admin.games.index')
+                ->withErrors(['game' => 'This game room already ended.']);
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | IMPORTANT
+        |--------------------------------------------------------------------------
+        | If room is OPEN but already declared, Start This Room is allowed.
+        | It means start new round in the same room.
+        */
+
+        if ($game->status === 'open' && blank($game->winning_side)) {
             return redirect()
                 ->route('admin.games.index', ['game_id' => $game->id])
                 ->withErrors(['game' => 'This game room is already open.']);
         }
 
-        if (in_array($game->status, ['ended', 'settled'])) {
-            return redirect()
-                ->route('admin.games.index')
-                ->withErrors(['game' => 'This game room is already ended. Please create or choose another room.']);
-        }
+        $this->resetRoomForNewRound($game);
 
-        $game->update([
+        $game->update($this->onlyExistingColumns('game_rounds', [
             'status' => 'open',
-        ]);
+            'winning_side' => null,
+            'started_at' => now(),
+            'closed_at' => null,
+            'settled_at' => null,
+        ]));
 
         return redirect()
             ->route('admin.games.index', ['game_id' => $game->id])
-            ->with('success', 'Betting is now open for this room.');
+            ->with('success', 'New round started. Betting is now open again.');
     }
 
     public function close(GameRound $game)
@@ -204,9 +228,16 @@ class AdminGameController extends Controller
                 ->withErrors(['game' => 'Only open game rooms can be closed.']);
         }
 
-        $game->update([
+        if (filled($game->winning_side)) {
+            return redirect()
+                ->route('admin.games.index', ['game_id' => $game->id])
+                ->withErrors(['game' => 'This round is already declared. Click Start This Room to begin a new round.']);
+        }
+
+        $game->update($this->onlyExistingColumns('game_rounds', [
             'status' => 'closed',
-        ]);
+            'closed_at' => now(),
+        ]));
 
         return redirect()
             ->route('admin.games.index', ['game_id' => $game->id])
@@ -215,19 +246,20 @@ class AdminGameController extends Controller
 
     public function end(GameRound $game)
     {
-        if (!in_array($game->status, ['open', 'closed'])) {
+        if (!in_array($game->status, ['waiting', 'open', 'closed', 'settled'])) {
             return redirect()
                 ->route('admin.games.index', ['game_id' => $game->id])
-                ->withErrors(['game' => 'Only open or closed game rooms can be ended.']);
+                ->withErrors(['game' => 'This game room cannot be ended.']);
         }
 
-        $game->update([
+        $game->update($this->onlyExistingColumns('game_rounds', [
             'status' => 'ended',
-        ]);
+            'ended_at' => now(),
+        ]));
 
         return redirect()
-            ->route('admin.games.index', ['game_id' => $game->id])
-            ->with('success', 'Game ended. You may now declare the result.');
+            ->route('admin.games.index')
+            ->with('success', 'Game room ended and hidden from the room list.');
     }
 
     public function declare(Request $request, GameRound $game)
@@ -236,10 +268,16 @@ class AdminGameController extends Controller
             'winning_side' => ['required', 'in:meron,wala,draw,cancelled'],
         ]);
 
-        if (!in_array($game->status, ['open', 'closed', 'ended'])) {
+        if (!in_array($game->status, ['open', 'closed'])) {
             return redirect()
-                ->route('admin.games.index')
-                ->withErrors(['game' => 'This game room cannot be declared.']);
+                ->route('admin.games.index', ['game_id' => $game->id])
+                ->withErrors(['game' => 'Only open or closed rooms can be declared.']);
+        }
+
+        if (filled($game->winning_side)) {
+            return redirect()
+                ->route('admin.games.index', ['game_id' => $game->id])
+                ->withErrors(['game' => 'This round is already declared. Click Start This Room to begin a new round.']);
         }
 
         return DB::transaction(function () use ($game, $data) {
@@ -247,29 +285,53 @@ class AdminGameController extends Controller
                 ->lockForUpdate()
                 ->firstOrFail();
 
-            if ($game->status === 'settled') {
+            if (filled($game->winning_side)) {
                 return redirect()
-                    ->route('admin.games.index')
-                    ->withErrors(['game' => 'This game room is already settled.']);
+                    ->route('admin.games.index', ['game_id' => $game->id])
+                    ->withErrors(['game' => 'This round is already declared. Click Start This Room to begin a new round.']);
             }
 
             if ($data['winning_side'] === 'cancelled') {
-                $this->cancelGame($game);
+                $this->cancelRound($game);
 
                 return redirect()
-                    ->route('admin.games.index')
-                    ->with('success', 'Game room cancelled and hidden from active room list.');
+                    ->route('admin.games.index', ['game_id' => $game->id])
+                    ->with('success', 'Round cancelled. Room stays open but betting is locked until you start a new round.');
             }
 
-            $this->settleGame($game, $data['winning_side']);
+            $this->settleRound($game, $data['winning_side']);
 
             return redirect()
-                ->route('admin.games.index')
-                ->with('success', 'Game result declared successfully. Room is now hidden from active room list.');
+                ->route('admin.games.index', ['game_id' => $game->id])
+                ->with('success', 'Result declared. Room stays open. Click Start This Room for the next round.');
         });
     }
 
-    private function cancelGame(GameRound $game): void
+    private function resetRoomForNewRound(GameRound $game): void
+    {
+        $game->update($this->onlyExistingColumns('game_rounds', [
+            'winning_side' => null,
+
+            'meron_total' => 0,
+            'wala_total' => 0,
+            'draw_total' => 0,
+            'total_pool' => 0,
+            'net_pool' => 0,
+
+            'meron_odds' => 0,
+            'wala_odds' => 0,
+            'draw_odds' => 0,
+
+            'commission_amount' => 0,
+            'admin_income' => 0,
+            'company_commission_amount' => 0,
+            'agent_commission_amount' => 0,
+
+            'payout_total' => 0,
+        ]));
+    }
+
+    private function cancelRound(GameRound $game): void
     {
         $bets = GameBet::where('game_round_id', $game->id)
             ->where('status', 'pending')
@@ -307,19 +369,29 @@ class AdminGameController extends Controller
                 'balance_after' => $balanceAfter,
                 'reference_type' => GameBet::class,
                 'reference_id' => $bet->id,
-                'description' => 'Bet refunded because game room was cancelled.',
+                'description' => 'Bet refunded because round was cancelled.',
             ]);
         }
 
+        /*
+        |--------------------------------------------------------------------------
+        | DECLARE CANCELLED
+        |--------------------------------------------------------------------------
+        | Status stays OPEN.
+        | winning_side is set, so betting is locked.
+        | Start This Room clears winning_side and starts next round.
+        */
+
         $game->update($this->onlyExistingColumns('game_rounds', [
             'winning_side' => 'cancelled',
-            'status' => 'settled',
+            'status' => 'open',
+            'settled_at' => now(),
         ]));
 
         $this->createLogrohan($game, 'cancelled');
     }
 
-    private function settleGame(GameRound $game, string $winningSide): void
+    private function settleRound(GameRound $game, string $winningSide): void
     {
         $game->recalculateTotalsAndOdds();
         $game->refresh();
@@ -395,17 +467,31 @@ class AdminGameController extends Controller
             }
         }
 
+        /*
+        |--------------------------------------------------------------------------
+        | DECLARE RESULT
+        |--------------------------------------------------------------------------
+        | Status stays OPEN.
+        | winning_side is set, so betting is locked.
+        | Start This Room clears winning_side and resets totals.
+        */
+
         $game->update($this->onlyExistingColumns('game_rounds', [
             'winning_side' => $winningSide,
-            'status' => 'settled',
+            'status' => 'open',
+
+            'settled_at' => now(),
+
             'payout_total' => round($totalPayout, 2),
+
             'commission_rate' => 5,
             'commission_amount' => round($totalCommission, 2),
+            'admin_income' => round($companyCommission, 2),
+
             'company_commission_rate' => 3,
             'agent_commission_rate' => 2,
             'company_commission_amount' => round($companyCommission, 2),
             'agent_commission_amount' => round($agentCommission, 2),
-            'admin_income' => round($companyCommission, 2),
         ]));
 
         $this->createLogrohan($game, $winningSide);
@@ -450,10 +536,6 @@ class AdminGameController extends Controller
 
     private function createLogrohan(GameRound $game, string $result): void
     {
-        if (LogrohanEntry::where('game_round_id', $game->id)->exists()) {
-            return;
-        }
-
         LogrohanEntry::create($this->onlyExistingColumns('logrohan_entries', [
             'game_round_id' => $game->id,
             'round_number' => $game->round_code ?? $game->round_number ?? $game->id,
@@ -465,7 +547,7 @@ class AdminGameController extends Controller
 
     private function visibleAdminRooms()
     {
-        return GameRound::whereIn('status', ['waiting', 'open', 'closed'])
+        return GameRound::whereIn('status', ['waiting', 'open', 'closed', 'settled'])
             ->latest('id')
             ->take(50)
             ->get();
