@@ -8,9 +8,13 @@ return new class extends Migration
 {
     public function up(): void
     {
+        if (!Schema::hasTable('game_rounds')) {
+            return;
+        }
+
         Schema::table('game_rounds', function (Blueprint $table) {
             if (!Schema::hasColumn('game_rounds', 'meron_total')) {
-                $table->decimal('meron_total', 15, 2)->default(0)->after('status');
+                $table->decimal('meron_total', 15, 2)->default(0)->after('winning_side');
             }
 
             if (!Schema::hasColumn('game_rounds', 'wala_total')) {
@@ -26,15 +30,23 @@ return new class extends Migration
             }
 
             if (!Schema::hasColumn('game_rounds', 'commission_rate')) {
-                $table->decimal('commission_rate', 8, 4)->default(5)->after('total_pool');
+                $table->decimal('commission_rate', 8, 4)->default(0.05)->after('total_pool');
             }
 
             if (!Schema::hasColumn('game_rounds', 'commission_amount')) {
                 $table->decimal('commission_amount', 15, 2)->default(0)->after('commission_rate');
             }
 
+            if (!Schema::hasColumn('game_rounds', 'company_commission_amount')) {
+                $table->decimal('company_commission_amount', 15, 2)->default(0)->after('commission_amount');
+            }
+
+            if (!Schema::hasColumn('game_rounds', 'agent_commission_amount')) {
+                $table->decimal('agent_commission_amount', 15, 2)->default(0)->after('company_commission_amount');
+            }
+
             if (!Schema::hasColumn('game_rounds', 'net_pool')) {
-                $table->decimal('net_pool', 15, 2)->default(0)->after('commission_amount');
+                $table->decimal('net_pool', 15, 2)->default(0)->after('agent_commission_amount');
             }
 
             if (!Schema::hasColumn('game_rounds', 'meron_odds')) {
@@ -61,6 +73,33 @@ return new class extends Migration
 
     public function down(): void
     {
-        // Safe rollback for SQLite.
+        if (!Schema::hasTable('game_rounds')) {
+            return;
+        }
+
+        Schema::table('game_rounds', function (Blueprint $table) {
+            $columns = [
+                'admin_income',
+                'payout_total',
+                'draw_odds',
+                'wala_odds',
+                'meron_odds',
+                'net_pool',
+                'agent_commission_amount',
+                'company_commission_amount',
+                'commission_amount',
+                'commission_rate',
+                'total_pool',
+                'draw_total',
+                'wala_total',
+                'meron_total',
+            ];
+
+            foreach ($columns as $column) {
+                if (Schema::hasColumn('game_rounds', $column)) {
+                    $table->dropColumn($column);
+                }
+            }
+        });
     }
 };

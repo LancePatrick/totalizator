@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Hash;
 
 class AdminPlayerController extends Controller
 {
@@ -40,7 +41,15 @@ class AdminPlayerController extends Controller
                 }
             })
             ->when($request->filled('kyc_status'), function ($query) use ($request) {
-                $query->where('kyc_status', $request->kyc_status);
+                if ($request->kyc_status === 'not_submitted') {
+                    $query->where(function ($q) {
+                        $q->whereNull('kyc_status')
+                            ->orWhere('kyc_status', '')
+                            ->orWhere('kyc_status', 'not_submitted');
+                    });
+                } else {
+                    $query->where('kyc_status', $request->kyc_status);
+                }
             })
             ->when($request->filled('appeal_status'), function ($query) use ($request) {
                 $query->where('appeal_status', $request->appeal_status);
@@ -99,7 +108,9 @@ class AdminPlayerController extends Controller
             'deactivated_by' => auth()->id(),
 
             'appeal_message' => null,
+            'appeal_reason' => null,
             'appeal_proof' => null,
+            'appeal_image' => null,
             'appeal_status' => null,
             'appeal_admin_note' => null,
             'appeal_submitted_at' => null,
@@ -108,6 +119,22 @@ class AdminPlayerController extends Controller
         ]);
 
         return back()->with('success', 'Player deactivated successfully.');
+    }
+
+    public function updatePassword(Request $request, User $player)
+    {
+        abort_if(auth()->user()->role !== 'admin', 403);
+        abort_if($player->role !== 'player', 404);
+
+        $data = $request->validate([
+            'password' => ['required', 'string', 'min:8', 'confirmed'],
+        ]);
+
+        $player->update([
+            'password' => Hash::make($data['password']),
+        ]);
+
+        return back()->with('success', 'Player password changed successfully.');
     }
 
     public function approveAppeal(User $player)

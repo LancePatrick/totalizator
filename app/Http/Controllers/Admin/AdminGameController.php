@@ -11,6 +11,7 @@ use App\Models\WalletTransaction;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Throwable;
 
 class AdminGameController extends Controller
 {
@@ -66,7 +67,7 @@ class AdminGameController extends Controller
             ->take(50)
             ->get()
             ->map(function ($entry) {
-                $result = strtolower($entry->result ?? $entry->winning_side ?? 'cancelled');
+                $result = strtolower($entry->result ?? 'cancelled');
 
                 if (in_array($result, ['cancel', 'canceled'])) {
                     $result = 'cancelled';
@@ -78,7 +79,7 @@ class AdminGameController extends Controller
 
                 return [
                     'id' => $entry->id,
-                    'round_number' => $entry->round_number ?? $entry->round_code ?? 'Room',
+                    'round_number' => $entry->round_number ?? 'Room',
                     'result' => strtoupper($result),
                     'result_key' => $result,
                     'created_at' => optional($entry->created_at)->format('M d, Y h:i A'),
@@ -140,12 +141,12 @@ class AdminGameController extends Controller
             'status' => 'waiting',
             'winning_side' => null,
 
-            'commission_rate' => 5,
+            'commission_rate' => 0.05,
             'commission_amount' => 0,
             'admin_income' => 0,
 
-            'company_commission_rate' => 3,
-            'agent_commission_rate' => 2,
+            'company_commission_rate' => 0.03,
+            'agent_commission_rate' => 0.02,
             'company_commission_amount' => 0,
             'agent_commission_amount' => 0,
 
@@ -161,8 +162,10 @@ class AdminGameController extends Controller
 
             'payout_total' => 0,
 
+            'opened_at' => null,
             'started_at' => null,
             'closed_at' => null,
+            'declared_at' => null,
             'ended_at' => null,
             'settled_at' => null,
         ];
@@ -191,14 +194,6 @@ class AdminGameController extends Controller
                 ->withErrors(['game' => 'This game room already ended.']);
         }
 
-        /*
-        |--------------------------------------------------------------------------
-        | IMPORTANT
-        |--------------------------------------------------------------------------
-        | If room is OPEN but already declared, Start This Room is allowed.
-        | It means start new round in the same room.
-        */
-
         if ($game->status === 'open' && blank($game->winning_side)) {
             return redirect()
                 ->route('admin.games.index', ['game_id' => $game->id])
@@ -210,8 +205,10 @@ class AdminGameController extends Controller
         $game->update($this->onlyExistingColumns('game_rounds', [
             'status' => 'open',
             'winning_side' => null,
+            'opened_at' => now(),
             'started_at' => now(),
             'closed_at' => null,
+            'declared_at' => null,
             'settled_at' => null,
         ]));
 
@@ -259,7 +256,7 @@ class AdminGameController extends Controller
 
         return redirect()
             ->route('admin.games.index')
-            ->with('success', 'Game room ended and hidden from the room list.');
+            ->with('success', 'Game room ended and hidden from active list.');
     }
 
     public function declare(Request $request, GameRound $game)
@@ -268,10 +265,18 @@ class AdminGameController extends Controller
             'winning_side' => ['required', 'in:meron,wala,draw,cancelled'],
         ]);
 
-        if (!in_array($game->status, ['open', 'closed'])) {
+        $winningSide = $data['winning_side'];
+
+        if ($game->status === 'ended') {
+            return redirect()
+                ->route('admin.games.index')
+                ->withErrors(['game' => 'This game room already ended.']);
+        }
+
+        if (!in_array($game->status, ['open', 'closed', 'settled'])) {
             return redirect()
                 ->route('admin.games.index', ['game_id' => $game->id])
-                ->withErrors(['game' => 'Only open or closed rooms can be declared.']);
+                ->withErrors(['game' => 'Only open or closed game rooms can be declared.']);
         }
 
         if (filled($game->winning_side)) {
@@ -280,31 +285,181 @@ class AdminGameController extends Controller
                 ->withErrors(['game' => 'This round is already declared. Click Start This Room to begin a new round.']);
         }
 
-        return DB::transaction(function () use ($game, $data) {
+        DB::transaction(function () use ($game, $winningSide) {
             $game = GameRound::whereKey($game->id)
                 ->lockForUpdate()
                 ->firstOrFail();
 
-            if (filled($game->winning_side)) {
-                return redirect()
-                    ->route('admin.games.index', ['game_id' => $game->id])
-                    ->withErrors(['game' => 'This round is already declared. Click Start This Room to begin a new round.']);
+            $pendingBets = GameBet::with('user')
+                ->where('game_round_id', $game->id)
+                ->where('status', 'pending')
+                ->lockForUpdate()
+                ->get();
+
+            $totalPool = (float) $pendingBets->sum('amount');
+
+            if ($winningSide === 'cancelled') {
+                $this->refundCancelledRound($game, $pendingBets, $totalPool);
+                $this->createLogrohanEntry($game, 'cancelled');
+
+                return;
             }
 
-            if ($data['winning_side'] === 'cancelled') {
-                $this->cancelRound($game);
+            $winnerBets = $pendingBets->where('side', $winningSide);
+            $loserBets = $pendingBets->where('side', '!=', $winningSide);
 
-                return redirect()
-                    ->route('admin.games.index', ['game_id' => $game->id])
-                    ->with('success', 'Round cancelled. Room stays open but betting is locked until you start a new round.');
+            $winnerTotal = (float) $winnerBets->sum('amount');
+
+            $commissionRate = 0.05;
+            $companyRate = 0.03;
+            $agentRate = 0.02;
+
+            $commissionAmount = round($totalPool * $commissionRate, 2);
+            $companyCommissionAmount = round($totalPool * $companyRate, 2);
+            $agentCommissionAmount = round($totalPool * $agentRate, 2);
+            $netPool = max(0, $totalPool - $commissionAmount);
+
+            $payoutTotal = 0;
+
+            foreach ($winnerBets as $bet) {
+                $player = $bet->user;
+
+                $payout = $winnerTotal > 0
+                    ? round(((float) $bet->amount / $winnerTotal) * $netPool, 2)
+                    : 0;
+
+                $payoutTotal += $payout;
+
+                if ($player && $payout > 0) {
+                    $this->creditWallet(
+                        user: $player,
+                        amount: $payout,
+                        type: 'payout',
+                        description: 'Winning payout from game result.',
+                        referenceType: GameBet::class,
+                        referenceId: $bet->id
+                    );
+                }
+
+                $bet->update([
+                    'status' => 'won',
+                    'payout_amount' => $payout,
+                ]);
             }
 
-            $this->settleRound($game, $data['winning_side']);
+            foreach ($loserBets as $bet) {
+                $bet->update([
+                    'status' => 'lost',
+                    'payout_amount' => 0,
+                ]);
+            }
 
-            return redirect()
-                ->route('admin.games.index', ['game_id' => $game->id])
-                ->with('success', 'Result declared. Room stays open. Click Start This Room for the next round.');
+            $game->update($this->onlyExistingColumns('game_rounds', [
+                'winning_side' => $winningSide,
+                'status' => 'open',
+
+                'total_pool' => $totalPool,
+                'commission_rate' => $commissionRate,
+                'commission_amount' => $commissionAmount,
+                'company_commission_amount' => $companyCommissionAmount,
+                'agent_commission_amount' => $agentCommissionAmount,
+                'net_pool' => $netPool,
+                'payout_total' => $payoutTotal,
+                'admin_income' => $commissionAmount,
+
+                'declared_at' => now(),
+                'settled_at' => now(),
+            ]));
+
+            $this->createLogrohanEntry($game, $winningSide);
         });
+
+        return redirect()
+            ->route('admin.games.index', ['game_id' => $game->id])
+            ->with('success', 'Game result declared successfully.');
+    }
+
+    private function refundCancelledRound(GameRound $game, $pendingBets, float $totalPool): void
+    {
+        foreach ($pendingBets as $bet) {
+            $player = $bet->user;
+
+            if ($player) {
+                $this->creditWallet(
+                    user: $player,
+                    amount: (float) $bet->amount,
+                    type: 'refund',
+                    description: 'Bet refunded because game was cancelled.',
+                    referenceType: GameBet::class,
+                    referenceId: $bet->id
+                );
+            }
+
+            $bet->update([
+                'status' => 'refunded',
+                'payout_amount' => $bet->amount,
+            ]);
+        }
+
+        $game->update($this->onlyExistingColumns('game_rounds', [
+            'winning_side' => 'cancelled',
+            'status' => 'open',
+
+            'total_pool' => $totalPool,
+            'commission_rate' => 0.05,
+            'commission_amount' => 0,
+            'company_commission_amount' => 0,
+            'agent_commission_amount' => 0,
+            'net_pool' => $totalPool,
+            'payout_total' => $totalPool,
+            'admin_income' => 0,
+
+            'declared_at' => now(),
+            'settled_at' => now(),
+        ]));
+    }
+
+    private function creditWallet(
+        User $user,
+        float $amount,
+        string $type,
+        string $description,
+        string $referenceType,
+        int $referenceId
+    ): void {
+        if ($amount <= 0) {
+            return;
+        }
+
+        $lockedUser = User::whereKey($user->id)
+            ->lockForUpdate()
+            ->first();
+
+        if (!$lockedUser) {
+            return;
+        }
+
+        $balanceBefore = (float) ($lockedUser->wallet_balance ?? 0);
+        $balanceAfter = $balanceBefore + $amount;
+
+        $lockedUser->update([
+            'wallet_balance' => $balanceAfter,
+        ]);
+
+        if (class_exists(WalletTransaction::class) && Schema::hasTable('wallet_transactions')) {
+            WalletTransaction::create($this->onlyExistingColumns('wallet_transactions', [
+                'user_id' => $lockedUser->id,
+                'admin_id' => auth()->id(),
+                'type' => $type,
+                'direction' => 'credit',
+                'amount' => $amount,
+                'balance_before' => $balanceBefore,
+                'balance_after' => $balanceAfter,
+                'reference_type' => $referenceType,
+                'reference_id' => $referenceId,
+                'description' => $description,
+            ]));
+        }
     }
 
     private function resetRoomForNewRound(GameRound $game): void
@@ -316,232 +471,16 @@ class AdminGameController extends Controller
             'wala_total' => 0,
             'draw_total' => 0,
             'total_pool' => 0,
+            'commission_amount' => 0,
+            'company_commission_amount' => 0,
+            'agent_commission_amount' => 0,
             'net_pool' => 0,
+            'payout_total' => 0,
+            'admin_income' => 0,
 
             'meron_odds' => 0,
             'wala_odds' => 0,
             'draw_odds' => 0,
-
-            'commission_amount' => 0,
-            'admin_income' => 0,
-            'company_commission_amount' => 0,
-            'agent_commission_amount' => 0,
-
-            'payout_total' => 0,
-        ]));
-    }
-
-    private function cancelRound(GameRound $game): void
-    {
-        $bets = GameBet::where('game_round_id', $game->id)
-            ->where('status', 'pending')
-            ->lockForUpdate()
-            ->get();
-
-        foreach ($bets as $bet) {
-            $player = User::whereKey($bet->user_id)
-                ->lockForUpdate()
-                ->first();
-
-            if (!$player) {
-                continue;
-            }
-
-            $balanceBefore = (float) $player->wallet_balance;
-            $balanceAfter = $balanceBefore + (float) $bet->amount;
-
-            $player->update([
-                'wallet_balance' => $balanceAfter,
-            ]);
-
-            $bet->update([
-                'status' => 'refunded',
-                'payout_amount' => (float) $bet->amount,
-            ]);
-
-            WalletTransaction::create([
-                'user_id' => $player->id,
-                'admin_id' => auth()->id(),
-                'type' => 'refund',
-                'direction' => 'credit',
-                'amount' => (float) $bet->amount,
-                'balance_before' => $balanceBefore,
-                'balance_after' => $balanceAfter,
-                'reference_type' => GameBet::class,
-                'reference_id' => $bet->id,
-                'description' => 'Bet refunded because round was cancelled.',
-            ]);
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | DECLARE CANCELLED
-        |--------------------------------------------------------------------------
-        | Status stays OPEN.
-        | winning_side is set, so betting is locked.
-        | Start This Room clears winning_side and starts next round.
-        */
-
-        $game->update($this->onlyExistingColumns('game_rounds', [
-            'winning_side' => 'cancelled',
-            'status' => 'open',
-            'settled_at' => now(),
-        ]));
-
-        $this->createLogrohan($game, 'cancelled');
-    }
-
-    private function settleRound(GameRound $game, string $winningSide): void
-    {
-        $game->recalculateTotalsAndOdds();
-        $game->refresh();
-
-        $winningOdds = match ($winningSide) {
-            'meron' => (float) ($game->meron_odds ?? 0),
-            'wala' => (float) ($game->wala_odds ?? 0),
-            'draw' => (float) ($game->draw_odds ?? 0),
-        };
-
-        $bets = GameBet::where('game_round_id', $game->id)
-            ->where('status', 'pending')
-            ->lockForUpdate()
-            ->get();
-
-        $totalPayout = 0;
-        $totalCommission = 0;
-        $companyCommission = 0;
-        $agentCommission = 0;
-
-        foreach ($bets as $bet) {
-            $player = User::whereKey($bet->user_id)
-                ->lockForUpdate()
-                ->first();
-
-            if (!$player) {
-                continue;
-            }
-
-            if ($bet->side === $winningSide) {
-                $grossPayout = round((float) $bet->amount * $winningOdds, 2);
-                $commissionAmount = round($grossPayout * 0.05, 2);
-                $companyAmount = round($grossPayout * 0.03, 2);
-                $agentAmount = round($grossPayout * 0.02, 2);
-                $netPayout = round($grossPayout - $commissionAmount, 2);
-
-                $balanceBefore = (float) $player->wallet_balance;
-                $balanceAfter = $balanceBefore + $netPayout;
-
-                $player->update([
-                    'wallet_balance' => $balanceAfter,
-                ]);
-
-                $bet->update([
-                    'status' => 'won',
-                    'payout_amount' => $netPayout,
-                ]);
-
-                WalletTransaction::create([
-                    'user_id' => $player->id,
-                    'admin_id' => auth()->id(),
-                    'type' => 'payout',
-                    'direction' => 'credit',
-                    'amount' => $netPayout,
-                    'balance_before' => $balanceBefore,
-                    'balance_after' => $balanceAfter,
-                    'reference_type' => GameBet::class,
-                    'reference_id' => $bet->id,
-                    'description' => 'Winning payout for ' . strtoupper($winningSide) . ' less 5% commission.',
-                ]);
-
-                $this->creditAgentCommission($player, $bet, $agentAmount);
-
-                $totalPayout += $netPayout;
-                $totalCommission += $commissionAmount;
-                $companyCommission += $companyAmount;
-                $agentCommission += $agentAmount;
-            } else {
-                $bet->update([
-                    'status' => 'lost',
-                    'payout_amount' => 0,
-                ]);
-            }
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | DECLARE RESULT
-        |--------------------------------------------------------------------------
-        | Status stays OPEN.
-        | winning_side is set, so betting is locked.
-        | Start This Room clears winning_side and resets totals.
-        */
-
-        $game->update($this->onlyExistingColumns('game_rounds', [
-            'winning_side' => $winningSide,
-            'status' => 'open',
-
-            'settled_at' => now(),
-
-            'payout_total' => round($totalPayout, 2),
-
-            'commission_rate' => 5,
-            'commission_amount' => round($totalCommission, 2),
-            'admin_income' => round($companyCommission, 2),
-
-            'company_commission_rate' => 3,
-            'agent_commission_rate' => 2,
-            'company_commission_amount' => round($companyCommission, 2),
-            'agent_commission_amount' => round($agentCommission, 2),
-        ]));
-
-        $this->createLogrohan($game, $winningSide);
-    }
-
-    private function creditAgentCommission(User $player, GameBet $bet, float $agentAmount): void
-    {
-        if (!$player->agent_id || $agentAmount <= 0) {
-            return;
-        }
-
-        $agent = User::whereKey($player->agent_id)
-            ->lockForUpdate()
-            ->first();
-
-        if (!$agent) {
-            return;
-        }
-
-        $before = (float) ($agent->commission_balance ?? 0);
-        $after = $before + $agentAmount;
-
-        $agent->update([
-            'commission_balance' => $after,
-        ]);
-
-        if (class_exists(\App\Models\CommissionTransaction::class)) {
-            \App\Models\CommissionTransaction::create([
-                'agent_id' => $agent->id,
-                'player_id' => $player->id,
-                'game_round_id' => $bet->game_round_id,
-                'game_bet_id' => $bet->id,
-                'type' => 'player_bet_commission',
-                'direction' => 'credit',
-                'amount' => $agentAmount,
-                'balance_before' => $before,
-                'balance_after' => $after,
-                'description' => '2% agent commission from winning payout.',
-            ]);
-        }
-    }
-
-    private function createLogrohan(GameRound $game, string $result): void
-    {
-        LogrohanEntry::create($this->onlyExistingColumns('logrohan_entries', [
-            'game_round_id' => $game->id,
-            'round_number' => $game->round_code ?? $game->round_number ?? $game->id,
-            'round_code' => $game->round_code ?? $game->round_number ?? $game->id,
-            'result' => $result,
-            'winning_side' => $result,
         ]));
     }
 
@@ -553,16 +492,41 @@ class AdminGameController extends Controller
             ->get();
     }
 
+    private function createLogrohanEntry(GameRound $game, string $result): void
+    {
+        if (!Schema::hasTable('logrohan_entries')) {
+            return;
+        }
+
+        $result = strtolower($result);
+
+        if (in_array($result, ['cancel', 'canceled'])) {
+            $result = 'cancelled';
+        }
+
+        if (!in_array($result, ['meron', 'wala', 'draw', 'cancelled'])) {
+            $result = 'cancelled';
+        }
+
+        try {
+            LogrohanEntry::create($this->onlyExistingColumns('logrohan_entries', [
+                'game_round_id' => $game->id,
+                'round_number' => $game->round_number ?? $game->round_code ?? $game->id,
+                'result' => $result,
+            ]));
+        } catch (Throwable $e) {
+            // If old enum does not support cancelled yet, do not crash declaration.
+        }
+    }
+
     private function onlyExistingColumns(string $table, array $payload): array
     {
         if (!Schema::hasTable($table)) {
-            return $payload;
+            return [];
         }
 
-        $columns = Schema::getColumnListing($table);
-
         return collect($payload)
-            ->only($columns)
-            ->toArray();
+            ->filter(fn ($value, $column) => Schema::hasColumn($table, $column))
+            ->all();
     }
 }

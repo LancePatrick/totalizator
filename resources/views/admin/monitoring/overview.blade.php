@@ -294,6 +294,154 @@
         }
     </style>
 
+    @php
+        $dateFrom = $dateFrom ?? request('date_from');
+        $dateTo = $dateTo ?? request('date_to');
+
+        $safeMoney = function ($value) {
+            return (float) ($value ?? 0);
+        };
+
+        /*
+        |--------------------------------------------------------------------------
+        | Safe Card Values
+        |--------------------------------------------------------------------------
+        | The controller sends $cards. This blade only fixes display values for:
+        | Total Draw Bet = Total Bets
+        | Total Draw Win = Total Bets - Total Commission
+        |--------------------------------------------------------------------------
+        */
+
+        $safeTotalBets = $safeMoney($totalBets ?? 0);
+        $safeTotalCommission = $safeMoney($totalCommission ?? 0);
+
+        if ($safeTotalCommission <= 0 && $safeTotalBets > 0) {
+            $safeTotalCommission = round($safeTotalBets * 0.05, 2);
+        }
+
+        $safeDrawBet = $safeTotalBets;
+        $safeDrawWin = round($safeTotalBets - $safeTotalCommission, 2);
+
+        if ($safeDrawWin < 0) {
+            $safeDrawWin = 0;
+        }
+
+        $cards = collect($cards ?? []);
+
+        if ($cards->isEmpty()) {
+            $companyCommission = $safeMoney($companyCommission ?? 0);
+            $agentCommission = $safeMoney($agentCommission ?? $totalAgentCommission ?? 0);
+            $totalFivePercentCommission = $safeMoney($totalFivePercentCommission ?? ($companyCommission + $agentCommission));
+
+            $cards = collect([
+                [
+                    'label' => 'Total Loading',
+                    'value' => $safeMoney($totalLoading ?? 0),
+                    'sub' => 'Approved wallet loading',
+                    'tone' => 'blue',
+                ],
+                [
+                    'label' => 'Total Withdrawal',
+                    'value' => $safeMoney($totalWithdrawal ?? 0),
+                    'sub' => 'Approved withdrawals',
+                    'tone' => 'red',
+                ],
+                [
+                    'label' => 'Total Convert Commission',
+                    'value' => $safeMoney($totalConvertCommission ?? 0),
+                    'sub' => 'Commission converted to load',
+                    'tone' => 'purple',
+                ],
+                [
+                    'label' => 'Commission Cashout',
+                    'value' => $safeMoney($totalCommissionCashOut ?? 0),
+                    'sub' => 'Commission withdrawn as cash',
+                    'tone' => 'red',
+                ],
+                [
+                    'label' => 'Total Bets',
+                    'value' => $safeTotalBets,
+                    'sub' => 'All valid player bets',
+                    'tone' => 'white',
+                ],
+                [
+                    'label' => 'Total Commission',
+                    'value' => $safeTotalCommission,
+                    'sub' => 'Total 5% commission',
+                    'tone' => 'green',
+                ],
+                [
+                    'label' => 'Total Agent Commission',
+                    'value' => $agentCommission,
+                    'sub' => 'Agent commission 2%',
+                    'tone' => 'yellow',
+                ],
+                [
+                    'label' => 'Company Commission 3%',
+                    'value' => $companyCommission,
+                    'sub' => 'Company share',
+                    'tone' => 'green',
+                ],
+                [
+                    'label' => 'Agent Commission Rate 2%',
+                    'value' => $agentCommission,
+                    'sub' => 'Agent share',
+                    'tone' => 'yellow',
+                ],
+                [
+                    'label' => 'Total of 5% Commission',
+                    'value' => $totalFivePercentCommission,
+                    'sub' => 'Company + agent',
+                    'tone' => 'green',
+                ],
+                [
+                    'label' => 'Total Draw Bet',
+                    'value' => $safeDrawBet,
+                    'sub' => 'Same as total pool / all valid player bets',
+                    'tone' => 'purple',
+                ],
+                [
+                    'label' => 'Total Draw Win',
+                    'value' => $safeDrawWin,
+                    'sub' => 'Total bets minus total commission',
+                    'tone' => 'blue',
+                ],
+                [
+                    'label' => 'Initial Wallet',
+                    'value' => $safeMoney($initialWallet ?? 0),
+                    'sub' => $dateFrom ? 'Wallet at start of selected day' : 'Starting wallet balance',
+                    'tone' => 'white',
+                ],
+                [
+                    'label' => 'Actual Wallet',
+                    'value' => $safeMoney($actualWallet ?? 0),
+                    'sub' => 'Current wallet balance',
+                    'tone' => 'green',
+                ],
+                [
+                    'label' => 'Must Total Wallet',
+                    'value' => $safeMoney($mustTotalWallet ?? 0),
+                    'sub' => 'Computed expected wallet',
+                    'tone' => 'yellow',
+                ],
+                [
+                    'label' => 'Wallet Difference',
+                    'value' => $safeMoney($walletDifference ?? 0),
+                    'sub' => 'Must wallet minus actual',
+                    'tone' => ($safeMoney($walletDifference ?? 0) == 0) ? 'green' : 'red',
+                ],
+            ]);
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Safe Daily Overview
+        |--------------------------------------------------------------------------
+        */
+
+        $dailyRows = collect($daily ?? $dailyOverview ?? []);
+    @endphp
+
     <div class="mon-page">
         <section class="mon-hero">
             <div class="hero-content">
@@ -340,10 +488,33 @@
 
         <section class="summary-grid">
             @foreach($cards as $card)
-                <div class="metric {{ $card['tone'] }}">
-                    <p class="label">{{ $card['label'] }}</p>
-                    <h2 class="value">₱{{ number_format($card['value'], 2) }}</h2>
-                    <p class="sub">{{ $card['sub'] }}</p>
+                @php
+                    $label = data_get($card, 'label', 'Metric');
+                    $value = (float) data_get($card, 'value', 0);
+                    $sub = data_get($card, 'sub', '');
+                    $tone = data_get($card, 'tone', 'white');
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Force correct Overview display only for these two cards.
+                    |--------------------------------------------------------------------------
+                    */
+
+                    if ($label === 'Total Draw Bet') {
+                        $value = $safeDrawBet;
+                        $sub = 'Same as total pool / all valid player bets';
+                    }
+
+                    if ($label === 'Total Draw Win') {
+                        $value = $safeDrawWin;
+                        $sub = 'Total bets minus total commission';
+                    }
+                @endphp
+
+                <div class="metric {{ $tone }}">
+                    <p class="label">{{ $label }}</p>
+                    <h2 class="value">₱{{ number_format($value, 2) }}</h2>
+                    <p class="sub">{{ $sub }}</p>
                 </div>
             @endforeach
         </section>
@@ -374,49 +545,95 @@
                     </thead>
 
                     <tbody>
-                        @forelse($daily as $day)
+                        @forelse($dailyRows as $day)
+                            @php
+                                $date = data_get($day, 'date', 'N/A');
+
+                                $games = (int) data_get(
+                                    $day,
+                                    'games',
+                                    data_get($day, 'total_games', data_get($day, 'game_count', 0))
+                                );
+
+                                $totalPool = (float) data_get(
+                                    $day,
+                                    'total_pool',
+                                    data_get($day, 'total_bets', data_get($day, 'pool', 0))
+                                );
+
+                                $companyCommission = (float) data_get(
+                                    $day,
+                                    'company_commission',
+                                    data_get($day, 'company_3', round($totalPool * 0.03, 2))
+                                );
+
+                                $agentCommission = (float) data_get(
+                                    $day,
+                                    'agent_commission',
+                                    data_get($day, 'agent_2', round($totalPool * 0.02, 2))
+                                );
+
+                                $totalCommission = (float) data_get(
+                                    $day,
+                                    'total_commission',
+                                    data_get($day, 'total_5', round($companyCommission + $agentCommission, 2))
+                                );
+
+                                $netPool = (float) data_get(
+                                    $day,
+                                    'net_pool',
+                                    round($totalPool - $totalCommission, 2)
+                                );
+
+                                $payoutTotal = (float) data_get(
+                                    $day,
+                                    'payout_total',
+                                    data_get($day, 'payout', data_get($day, 'total_payout', 0))
+                                );
+                            @endphp
+
                             <tr>
                                 <td>
-                                    <span class="amount">{{ $day['date'] }}</span>
+                                    <span class="amount">{{ $date }}</span>
                                 </td>
 
                                 <td>
-                                    {{ number_format($day['games']) }}
+                                    {{ number_format($games) }}
                                 </td>
 
                                 <td>
                                     <span class="amount-blue">
-                                        ₱{{ number_format($day['total_pool'], 2) }}
+                                        ₱{{ number_format($totalPool, 2) }}
                                     </span>
                                 </td>
 
                                 <td>
                                     <span class="amount-green">
-                                        ₱{{ number_format($day['company_commission'], 2) }}
+                                        ₱{{ number_format($companyCommission, 2) }}
                                     </span>
                                 </td>
 
                                 <td>
                                     <span class="amount-orange">
-                                        ₱{{ number_format($day['agent_commission'], 2) }}
+                                        ₱{{ number_format($agentCommission, 2) }}
                                     </span>
                                 </td>
 
                                 <td>
                                     <span class="amount-green">
-                                        ₱{{ number_format($day['total_commission'], 2) }}
+                                        ₱{{ number_format($totalCommission, 2) }}
                                     </span>
                                 </td>
 
                                 <td>
                                     <span class="amount">
-                                        ₱{{ number_format($day['net_pool'], 2) }}
+                                        ₱{{ number_format($netPool, 2) }}
                                     </span>
                                 </td>
 
                                 <td>
                                     <span class="amount-purple">
-                                        ₱{{ number_format($day['payout_total'], 2) }}
+                                        ₱{{ number_format($payoutTotal, 2) }}
                                     </span>
                                 </td>
                             </tr>

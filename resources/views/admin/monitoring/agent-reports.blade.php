@@ -332,15 +332,36 @@
     </style>
 
     @php
-        $totalAgents = method_exists($agents, 'total') ? $agents->total() : $agents->count();
+        $agents = $agents ?? collect();
 
-        $visibleAgentWallet = collect($agents->items())->sum(function ($agent) {
-            return (float) ($agent->wallet_balance ?? 0);
+        $visibleAgents = method_exists($agents, 'items')
+            ? collect($agents->items())
+            : collect($agents);
+
+        $totalAgents = method_exists($agents, 'total')
+            ? $agents->total()
+            : $visibleAgents->count();
+
+        $visibleAgentWallet = $visibleAgents->sum(function ($row) {
+            $agent = data_get($row, 'agent', $row);
+
+            return (float) data_get($agent, 'wallet_balance', 0);
         });
 
-        $visiblePlayers = collect($agents->items())->sum(function ($agent) {
-            return (int) ($agent->total_players_count ?? 0);
+        $visiblePlayers = $visibleAgents->sum(function ($row) {
+            return (int) data_get($row, 'players_count', data_get($row, 'total_players_count', 0));
         });
+
+        $computedTotalPlayerBets = $visibleAgents->sum(function ($row) {
+            return (float) data_get($row, 'total_bets', data_get($row, 'total_player_bets', 0));
+        });
+
+        $computedTotalAgentCommission = $visibleAgents->sum(function ($row) {
+            return (float) data_get($row, 'agent_commission', data_get($row, 'computed_agent_commission', 0));
+        });
+
+        $totalPlayerBets = $totalPlayerBets ?? $computedTotalPlayerBets;
+        $totalAgentCommission = $totalAgentCommission ?? $computedTotalAgentCommission;
     @endphp
 
     <div class="page">
@@ -369,13 +390,13 @@
 
             <div class="summary-card">
                 <p class="summary-label">Total Player Bets</p>
-                <h2 class="summary-value blue">₱{{ number_format($totalPlayerBets ?? 0, 2) }}</h2>
+                <h2 class="summary-value blue">₱{{ number_format($totalPlayerBets, 2) }}</h2>
                 <p class="summary-sub">All filtered agent player bets</p>
             </div>
 
             <div class="summary-card">
                 <p class="summary-label">Total Agent Commission 2%</p>
-                <h2 class="summary-value orange">₱{{ number_format($totalAgentCommission ?? 0, 2) }}</h2>
+                <h2 class="summary-value orange">₱{{ number_format($totalAgentCommission, 2) }}</h2>
                 <p class="summary-sub">Computed from player bets</p>
             </div>
 
@@ -452,52 +473,68 @@
                     </thead>
 
                     <tbody>
-                        @forelse($agents as $agent)
+                        @forelse($visibleAgents as $row)
+                            @php
+                                $agent = data_get($row, 'agent', $row);
+
+                                $agentName = data_get($agent, 'name', 'N/A');
+                                $agentId = data_get($agent, 'id', 'N/A');
+                                $agentEmail = data_get($agent, 'email', 'N/A');
+                                $agentCode = data_get($agent, 'agent_code', 'N/A');
+
+                                $agentPlayers = (int) data_get($row, 'players_count', data_get($row, 'total_players_count', 0));
+                                $agentWallet = (float) data_get($agent, 'wallet_balance', data_get($row, 'wallet_balance', 0));
+                                $agentBets = (float) data_get($row, 'total_bets', data_get($row, 'total_player_bets', 0));
+                                $agentCommission = (float) data_get($row, 'agent_commission', data_get($row, 'computed_agent_commission', 0));
+
+                                $agentIsActive = (bool) data_get($agent, 'is_active', data_get($row, 'is_active', true));
+                            @endphp
+
                             <tr>
                                 <td>
-                                    <p class="name">{{ $agent->name }}</p>
-                                    <p class="muted">Agent ID: #{{ $agent->id }}</p>
+                                    <p class="name">{{ $agentName }}</p>
+                                    <p class="muted">Agent ID: #{{ $agentId }}</p>
                                 </td>
 
                                 <td>
-                                    {{ $agent->email }}
+                                    {{ $agentEmail }}
                                 </td>
 
                                 <td>
                                     <span class="pill pill-blue">
-                                        {{ $agent->agent_code ?: 'N/A' }}
+                                        {{ $agentCode ?: 'N/A' }}
                                     </span>
                                 </td>
 
                                 <td>
                                     <span class="amount">
-                                        {{ number_format($agent->total_players_count ?? 0) }}
+                                        {{ number_format($agentPlayers) }}
                                     </span>
                                     <p class="muted">assigned player/s</p>
                                 </td>
 
                                 <td>
                                     <span class="amount green">
-                                        ₱{{ number_format($agent->wallet_balance ?? 0, 2) }}
+                                        ₱{{ number_format($agentWallet, 2) }}
                                     </span>
                                 </td>
 
                                 <td>
                                     <span class="bet-amount">
-                                        ₱{{ number_format($agent->total_player_bets ?? 0, 2) }}
+                                        ₱{{ number_format($agentBets, 2) }}
                                     </span>
                                 </td>
 
                                 <td>
                                     <span class="commission-amount">
-                                        ₱{{ number_format($agent->computed_agent_commission ?? 0, 2) }}
+                                        ₱{{ number_format($agentCommission, 2) }}
                                     </span>
                                     <p class="muted">2% of player bets</p>
                                 </td>
 
                                 <td>
-                                    <span class="pill {{ $agent->is_active ? 'pill-green' : 'pill-red' }}">
-                                        {{ $agent->is_active ? 'Active' : 'Inactive' }}
+                                    <span class="pill {{ $agentIsActive ? 'pill-green' : 'pill-red' }}">
+                                        {{ $agentIsActive ? 'Active' : 'Inactive' }}
                                     </span>
                                 </td>
                             </tr>
@@ -514,9 +551,11 @@
                 </table>
             </div>
 
-            <div class="pagination">
-                {{ $agents->links() }}
-            </div>
+            @if(method_exists($agents, 'links'))
+                <div class="pagination">
+                    {{ $agents->links() }}
+                </div>
+            @endif
         </section>
     </div>
 </x-layouts.app>

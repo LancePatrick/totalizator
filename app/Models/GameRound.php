@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Schema;
 
 class GameRound extends Model
 {
@@ -39,8 +40,10 @@ class GameRound extends Model
 
         'payout_total',
 
+        'opened_at',
         'started_at',
         'closed_at',
+        'declared_at',
         'ended_at',
         'settled_at',
     ];
@@ -67,8 +70,10 @@ class GameRound extends Model
 
         'payout_total' => 'decimal:2',
 
+        'opened_at' => 'datetime',
         'started_at' => 'datetime',
         'closed_at' => 'datetime',
+        'declared_at' => 'datetime',
         'ended_at' => 'datetime',
         'settled_at' => 'datetime',
     ];
@@ -85,7 +90,21 @@ class GameRound extends Model
 
     public function normalizeCommissionRate(): float
     {
-        $rate = (float) ($this->commission_rate ?? 5);
+        $rate = (float) ($this->commission_rate ?? 0.05);
+
+        return $rate > 1 ? $rate / 100 : $rate;
+    }
+
+    public function normalizeCompanyCommissionRate(): float
+    {
+        $rate = (float) ($this->company_commission_rate ?? 0.03);
+
+        return $rate > 1 ? $rate / 100 : $rate;
+    }
+
+    public function normalizeAgentCommissionRate(): float
+    {
+        $rate = (float) ($this->agent_commission_rate ?? 0.02);
 
         return $rate > 1 ? $rate / 100 : $rate;
     }
@@ -110,25 +129,41 @@ class GameRound extends Model
         $totalPool = $meronTotal + $walaTotal + $drawTotal;
 
         $commissionRate = $this->normalizeCommissionRate();
+        $companyCommissionRate = $this->normalizeCompanyCommissionRate();
+        $agentCommissionRate = $this->normalizeAgentCommissionRate();
+
         $commissionAmount = round($totalPool * $commissionRate, 2);
+        $companyCommissionAmount = round($totalPool * $companyCommissionRate, 2);
+        $agentCommissionAmount = round($totalPool * $agentCommissionRate, 2);
+
         $netPool = round($totalPool - $commissionAmount, 2);
 
         $meronOdds = $meronTotal > 0 ? round($netPool / $meronTotal, 4) : 0;
         $walaOdds = $walaTotal > 0 ? round($netPool / $walaTotal, 4) : 0;
         $drawOdds = $drawTotal > 0 ? round($netPool / $drawTotal, 4) : 0;
 
-        $this->update([
+        $payload = [
             'meron_total' => round($meronTotal, 2),
             'wala_total' => round($walaTotal, 2),
             'draw_total' => round($drawTotal, 2),
             'total_pool' => round($totalPool, 2),
+
+            'commission_rate' => $commissionRate,
             'commission_amount' => round($commissionAmount, 2),
+            'company_commission_rate' => $companyCommissionRate,
+            'agent_commission_rate' => $agentCommissionRate,
+            'company_commission_amount' => round($companyCommissionAmount, 2),
+            'agent_commission_amount' => round($agentCommissionAmount, 2),
+
             'admin_income' => round($commissionAmount, 2),
             'net_pool' => round($netPool, 2),
+
             'meron_odds' => round($meronOdds, 4),
             'wala_odds' => round($walaOdds, 4),
             'draw_odds' => round($drawOdds, 4),
-        ]);
+        ];
+
+        $this->update($this->onlyExistingColumns('game_rounds', $payload));
     }
 
     public function oddsForSide(string $side): float
@@ -144,5 +179,16 @@ class GameRound extends Model
     public function perHundredPrizeForSide(string $side): float
     {
         return round($this->oddsForSide($side) * 100, 2);
+    }
+
+    private function onlyExistingColumns(string $table, array $payload): array
+    {
+        if (!Schema::hasTable($table)) {
+            return [];
+        }
+
+        return collect($payload)
+            ->filter(fn ($value, $column) => Schema::hasColumn($table, $column))
+            ->all();
     }
 }

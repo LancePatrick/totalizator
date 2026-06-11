@@ -52,18 +52,22 @@ Route::middleware(['auth'])->group(function () {
         Route::get('/agents', [AdminAgentController::class, 'index'])
             ->name('agents.index');
 
-        Route::post('/agents/{agent}/activate', [AdminAgentController::class, 'activate'])
-            ->name('agents.activate');
+       Route::post('/agents/{agent}/activate', [AdminAgentController::class, 'activate'])
+    ->name('agents.activate');
 
-        Route::post('/agents/{agent}/deactivate', [AdminAgentController::class, 'deactivate'])
-            ->name('agents.deactivate');
+Route::post('/agents/{agent}/deactivate', [AdminAgentController::class, 'deactivate'])
+    ->name('agents.deactivate');
+
+Route::post('/agents/{agent}/password', [AdminAgentController::class, 'updatePassword'])
+    ->name('agents.password.update');
 
         Route::get('/players', [AdminPlayerController::class, 'index'])
             ->name('players.index');
 
         Route::post('/players/{player}/activate', [AdminPlayerController::class, 'activate'])
             ->name('players.activate');
-
+Route::post('/players/{player}/password', [AdminPlayerController::class, 'updatePassword'])
+    ->name('players.password.update');
         Route::post('/players/{player}/deactivate', [AdminPlayerController::class, 'deactivate'])
             ->name('players.deactivate');
 

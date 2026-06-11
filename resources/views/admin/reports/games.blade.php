@@ -322,6 +322,82 @@
         }
     </style>
 
+    @php
+        $dailyRows = collect($dailyEarnings ?? []);
+
+        $computedTotalGames = $dailyRows->sum(function ($day) {
+            return (int) data_get($day, 'games', 0);
+        });
+
+        $computedTotalPool = $dailyRows->sum(function ($day) {
+            return (float) data_get($day, 'total_pool', 0);
+        });
+
+        $computedCommissionEarned = $dailyRows->sum(function ($day) {
+            $pool = (float) data_get($day, 'total_pool', 0);
+
+            return (float) data_get(
+                $day,
+                'commission',
+                data_get($day, 'total_commission', round($pool * 0.05, 2))
+            );
+        });
+
+        $computedNetPool = $dailyRows->sum(function ($day) {
+            $pool = (float) data_get($day, 'total_pool', 0);
+            $commission = (float) data_get(
+                $day,
+                'commission',
+                data_get($day, 'total_commission', round($pool * 0.05, 2))
+            );
+
+            return (float) data_get($day, 'net_pool', round($pool - $commission, 2));
+        });
+
+        $computedPayoutTotal = $dailyRows->sum(function ($day) {
+            return (float) data_get($day, 'payout_total', 0);
+        });
+
+        $computedAdminIncome = $dailyRows->sum(function ($day) {
+            $pool = (float) data_get($day, 'total_pool', 0);
+            $commission = (float) data_get(
+                $day,
+                'commission',
+                data_get($day, 'total_commission', round($pool * 0.05, 2))
+            );
+
+            return (float) data_get($day, 'admin_income', $commission);
+        });
+
+        $safeTotalGames = $computedTotalGames > 0
+            ? $computedTotalGames
+            : (int) ($totalGames ?? 0);
+
+        $safeTotalPool = $computedTotalPool > 0
+            ? $computedTotalPool
+            : (float) ($totalPool ?? 0);
+
+        $safeCommissionEarned = $computedCommissionEarned > 0
+            ? $computedCommissionEarned
+            : round($safeTotalPool * 0.05, 2);
+
+        $safeNetPool = $computedNetPool > 0
+            ? $computedNetPool
+            : round($safeTotalPool - $safeCommissionEarned, 2);
+
+        $safePayoutTotal = $computedPayoutTotal > 0
+            ? $computedPayoutTotal
+            : (float) ($payoutTotal ?? 0);
+
+        $safeAdminIncome = $computedAdminIncome > 0
+            ? $computedAdminIncome
+            : $safeCommissionEarned;
+
+        $safeAverageIncomePerGame = $safeTotalGames > 0
+            ? round($safeAdminIncome / $safeTotalGames, 2)
+            : 0;
+    @endphp
+
     <div class="report-page">
         <section class="report-hero">
             <div class="report-hero-inner">
@@ -340,42 +416,42 @@
         <section class="summary-grid">
             <div class="summary-card">
                 <p class="summary-label">Total Games</p>
-                <h2 class="summary-value">{{ number_format($totalGames ?? 0) }}</h2>
+                <h2 class="summary-value">{{ number_format($safeTotalGames) }}</h2>
                 <p class="summary-sub">Filtered game count</p>
             </div>
 
             <div class="summary-card">
                 <p class="summary-label">Total Pool</p>
-                <h2 class="summary-value">₱{{ number_format($totalPool ?? 0, 2) }}</h2>
+                <h2 class="summary-value">₱{{ number_format($safeTotalPool, 2) }}</h2>
                 <p class="summary-sub">Meron + Wala + Draw</p>
             </div>
 
             <div class="summary-card">
                 <p class="summary-label">Commission / Plasada</p>
                 <h2 class="summary-value" style="color:#ea580c;">
-                    ₱{{ number_format($commissionEarned ?? 0, 2) }}
+                    ₱{{ number_format($safeCommissionEarned, 2) }}
                 </h2>
                 <p class="summary-sub">Total pool × commission rate</p>
             </div>
 
             <div class="summary-card">
                 <p class="summary-label">Final All Bet / Net Pool</p>
-                <h2 class="summary-value">₱{{ number_format($netPool ?? 0, 2) }}</h2>
+                <h2 class="summary-value">₱{{ number_format($safeNetPool, 2) }}</h2>
                 <p class="summary-sub">Total pool minus commission</p>
             </div>
 
             <div class="summary-card">
                 <p class="summary-label">Payout Total</p>
                 <h2 class="summary-value" style="color:#7c3aed;">
-                    ₱{{ number_format($payoutTotal ?? 0, 2) }}
+                    ₱{{ number_format($safePayoutTotal, 2) }}
                 </h2>
                 <p class="summary-sub">Total paid to winners/refunds</p>
             </div>
 
             <div class="summary-card">
-                <p class="summary-label">Admin Income</p>
+                <p class="summary-label">Commission</p>
                 <h2 class="summary-value" style="color:#16a34a;">
-                    ₱{{ number_format($adminIncome ?? $commissionEarned ?? 0, 2) }}
+                    ₱{{ number_format($safeAdminIncome, 2) }}
                 </h2>
                 <p class="summary-sub">Commission earnings</p>
             </div>
@@ -383,9 +459,9 @@
             <div class="summary-card">
                 <p class="summary-label">Average Income/Game</p>
                 <h2 class="summary-value">
-                    ₱{{ number_format($averageIncomePerGame ?? 0, 2) }}
+                    ₱{{ number_format($safeAverageIncomePerGame, 2) }}
                 </h2>
-                <p class="summary-sub">Admin income average</p>
+                <p class="summary-sub">income average</p>
             </div>
 
             <div class="summary-card">
@@ -466,37 +542,49 @@
 
             <div class="daily-grid">
                 @forelse($dailyEarnings as $day)
+                    @php
+                        $dayPool = (float) data_get($day, 'total_pool', 0);
+                        $dayCommission = (float) data_get(
+                            $day,
+                            'commission',
+                            data_get($day, 'total_commission', round($dayPool * 0.05, 2))
+                        );
+                        $dayNetPool = (float) data_get($day, 'net_pool', round($dayPool - $dayCommission, 2));
+                        $dayAdminIncome = (float) data_get($day, 'admin_income', $dayCommission);
+                        $dayPayout = (float) data_get($day, 'payout_total', 0);
+                    @endphp
+
                     <div class="daily-card">
-                        <p class="daily-date">{{ $day['date'] }}</p>
+                        <p class="daily-date">{{ data_get($day, 'date', 'N/A') }}</p>
 
                         <div class="daily-row">
                             <span>Games</span>
-                            <strong>{{ number_format($day['games']) }}</strong>
+                            <strong>{{ number_format((int) data_get($day, 'games', 0)) }}</strong>
                         </div>
 
                         <div class="daily-row">
                             <span>Total Pool</span>
-                            <strong>₱{{ number_format($day['total_pool'], 2) }}</strong>
+                            <strong>₱{{ number_format($dayPool, 2) }}</strong>
                         </div>
 
                         <div class="daily-row">
                             <span>Final All Bet</span>
-                            <strong>₱{{ number_format($day['net_pool'], 2) }}</strong>
+                            <strong>₱{{ number_format($dayNetPool, 2) }}</strong>
                         </div>
 
                         <div class="daily-row">
                             <span>Commission</span>
-                            <strong style="color:#ea580c;">₱{{ number_format($day['commission'], 2) }}</strong>
+                            <strong style="color:#ea580c;">₱{{ number_format($dayCommission, 2) }}</strong>
                         </div>
 
                         <div class="daily-row">
                             <span>Payout</span>
-                            <strong style="color:#7c3aed;">₱{{ number_format($day['payout_total'] ?? 0, 2) }}</strong>
+                            <strong style="color:#7c3aed;">₱{{ number_format($dayPayout, 2) }}</strong>
                         </div>
 
                         <div class="daily-row">
                             <span>Admin Income</span>
-                            <strong style="color:#16a34a;">₱{{ number_format($day['admin_income'] ?? $day['commission'], 2) }}</strong>
+                            <strong style="color:#16a34a;">₱{{ number_format($dayAdminIncome, 2) }}</strong>
                         </div>
                     </div>
                 @empty
@@ -545,8 +633,23 @@
                                     default => 'pill-default',
                                 };
 
-                                $commissionAmount = (float) ($game->commission_amount ?? max(0, ($game->total_pool ?? 0) - ($game->net_pool ?? 0)));
-                                $adminGameIncome = (float) ($game->admin_income ?? $commissionAmount);
+                                $gameTotalPool = (float) (
+                                    $game->total_pool
+                                    ?? (($game->meron_total ?? 0) + ($game->wala_total ?? 0) + ($game->draw_total ?? 0))
+                                );
+
+                                $rawRate = (float) ($game->commission_rate ?? 0.05);
+                                $ratePercent = $rawRate <= 1 ? $rawRate * 100 : $rawRate;
+
+                                if (($game->winning_side ?? null) === 'cancelled') {
+                                    $commissionAmount = 0;
+                                    $gameNetPool = $gameTotalPool;
+                                    $adminGameIncome = 0;
+                                } else {
+                                    $commissionAmount = round($gameTotalPool * ($ratePercent / 100), 2);
+                                    $gameNetPool = round($gameTotalPool - $commissionAmount, 2);
+                                    $adminGameIncome = $commissionAmount;
+                                }
                             @endphp
 
                             <tr>
@@ -575,11 +678,11 @@
                                 <td><span class="amount">₱{{ number_format($game->draw_total ?? 0, 2) }}</span></td>
 
                                 <td>
-                                    <span class="amount">₱{{ number_format($game->total_pool ?? 0, 2) }}</span>
+                                    <span class="amount">₱{{ number_format($gameTotalPool, 2) }}</span>
                                 </td>
 
                                 <td>
-                                    <span class="amount">{{ number_format($game->commission_rate ?? 0, 2) }}%</span>
+                                    <span class="amount">{{ number_format($ratePercent, 2) }}%</span>
                                 </td>
 
                                 <td>
@@ -587,7 +690,7 @@
                                 </td>
 
                                 <td>
-                                    <span class="amount">₱{{ number_format($game->net_pool ?? 0, 2) }}</span>
+                                    <span class="amount">₱{{ number_format($gameNetPool, 2) }}</span>
                                 </td>
 
                                 <td>

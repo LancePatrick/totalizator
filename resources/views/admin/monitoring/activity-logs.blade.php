@@ -334,17 +334,23 @@
     </style>
 
     @php
-        $visibleLogs = method_exists($logs, 'items') ? collect($logs->items()) : collect($logs);
+        $logs = $logs ?? $activityLogs ?? $transactions ?? collect();
+
+        $visibleLogs = method_exists($logs, 'items')
+            ? collect($logs->items())
+            : collect($logs);
 
         $visibleCredit = $visibleLogs
             ->where('direction', 'credit')
-            ->sum(fn ($log) => (float) ($log->amount ?? 0));
+            ->sum(fn ($log) => (float) data_get($log, 'amount', 0));
 
         $visibleDebit = $visibleLogs
             ->where('direction', 'debit')
-            ->sum(fn ($log) => (float) ($log->amount ?? 0));
+            ->sum(fn ($log) => (float) data_get($log, 'amount', 0));
 
-        $visibleCount = method_exists($logs, 'total') ? $logs->total() : $visibleLogs->count();
+        $visibleCount = method_exists($logs, 'total')
+            ? $logs->total()
+            : $visibleLogs->count();
     @endphp
 
     <div class="page">
@@ -451,56 +457,69 @@
                     </thead>
 
                     <tbody>
-                        @forelse($logs as $log)
+                        @forelse($visibleLogs as $log)
                             @php
-                                $direction = strtolower($log->direction ?? '');
+                                $direction = strtolower((string) data_get($log, 'direction', ''));
                                 $isCredit = $direction === 'credit';
+
+                                $createdAt = data_get($log, 'created_at');
+                                $userName = data_get($log, 'user.name', 'Unknown User');
+                                $userEmail = data_get($log, 'user.email', 'No email');
+                                $type = data_get($log, 'type', 'N/A');
+                                $amount = (float) data_get($log, 'amount', 0);
+                                $before = (float) data_get($log, 'balance_before', 0);
+                                $after = (float) data_get($log, 'balance_after', 0);
+                                $description = data_get($log, 'description', 'No description');
                             @endphp
 
                             <tr>
                                 <td>
-                                    <p class="name">{{ $log->created_at?->format('M d, Y') }}</p>
-                                    <p class="muted">{{ $log->created_at?->format('h:i A') }}</p>
+                                    <p class="name">
+                                        {{ $createdAt ? \Illuminate\Support\Carbon::parse($createdAt)->format('M d, Y') : 'N/A' }}
+                                    </p>
+                                    <p class="muted">
+                                        {{ $createdAt ? \Illuminate\Support\Carbon::parse($createdAt)->format('h:i A') : '' }}
+                                    </p>
                                 </td>
 
                                 <td>
-                                    <p class="name">{{ $log->user?->name ?? 'Unknown User' }}</p>
-                                    <p class="muted">{{ $log->user?->email ?? 'No email' }}</p>
+                                    <p class="name">{{ $userName }}</p>
+                                    <p class="muted">{{ $userEmail }}</p>
                                 </td>
 
                                 <td>
                                     <span class="pill pill-type">
-                                        {{ strtoupper(str_replace('_', ' ', $log->type ?? 'N/A')) }}
+                                        {{ strtoupper(str_replace('_', ' ', $type)) }}
                                     </span>
                                 </td>
 
                                 <td>
                                     <span class="pill {{ $isCredit ? 'pill-credit' : 'pill-debit' }}">
-                                        {{ strtoupper($log->direction ?? 'N/A') }}
+                                        {{ strtoupper($direction ?: 'N/A') }}
                                     </span>
                                 </td>
 
                                 <td>
                                     <span class="{{ $isCredit ? 'amount-credit' : 'amount-debit' }}">
-                                        {{ $isCredit ? '+' : '-' }} ₱{{ number_format($log->amount ?? 0, 2) }}
+                                        {{ $isCredit ? '+' : '-' }} ₱{{ number_format($amount, 2) }}
                                     </span>
                                 </td>
 
                                 <td>
                                     <span class="amount">
-                                        ₱{{ number_format($log->balance_before ?? 0, 2) }}
+                                        ₱{{ number_format($before, 2) }}
                                     </span>
                                 </td>
 
                                 <td>
                                     <span class="amount">
-                                        ₱{{ number_format($log->balance_after ?? 0, 2) }}
+                                        ₱{{ number_format($after, 2) }}
                                     </span>
                                 </td>
 
                                 <td>
                                     <div class="description">
-                                        {{ $log->description ?: 'No description' }}
+                                        {{ $description ?: 'No description' }}
                                     </div>
                                 </td>
                             </tr>
@@ -517,9 +536,11 @@
                 </table>
             </div>
 
-            <div class="pagination">
-                {{ $logs->links() }}
-            </div>
+            @if(method_exists($logs, 'links'))
+                <div class="pagination">
+                    {{ $logs->links() }}
+                </div>
+            @endif
         </section>
     </div>
 </x-layouts.app>

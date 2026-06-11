@@ -28,7 +28,7 @@
                     box-shadow:0 16px 32px rgba(37,99,235,.22);
                 "
             >
-                JL
+                SP
             </div>
 
             <p

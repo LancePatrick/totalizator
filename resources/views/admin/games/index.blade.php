@@ -159,7 +159,7 @@
 
                 <a
                     href="{{ route('admin.games.index') }}"
-                    class="inline-flex h-11 items-center justify-center rounded-2xl bg-slate-950 px-5 text-xs font-black uppercase tracking-wide text-white transition hover:-translate-y-0.5 hover:bg-slate-800"
+                    class="inline-flex h-11 items-center justify-center rounded-2xl bg-slate-100 px-5 text-xs font-black uppercase tracking-wide text-white transition hover:-translate-y-0.5 hover:bg-slate-100"
                 >
                     ← Back to Game List
                 </a>
@@ -480,7 +480,7 @@
                 <section class="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
                     <div>
                         <h2 class="text-2xl font-black tracking-tight text-slate-950">
-                            Logrohan / Result History
+                           Result History
                         </h2>
 
                         <p class="mt-1 text-sm font-bold text-slate-500">

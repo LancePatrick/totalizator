@@ -9,9 +9,9 @@ use App\Models\MoneyRequest;
 use App\Models\User;
 use App\Models\WalletTransaction;
 use App\Models\WithdrawalRequest;
-use App\Support\PaginationHelper;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Schema;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class AdminMonitoringController extends Controller
 {
@@ -20,11 +20,11 @@ class AdminMonitoringController extends Controller
         $dateFrom = $request->date_from;
         $dateTo = $request->date_to;
 
-        $moneyRequests = $this->dateFilter(MoneyRequest::query(), $dateFrom, $dateTo);
-        $withdrawals = $this->dateFilter(WithdrawalRequest::query(), $dateFrom, $dateTo);
-        $bets = $this->dateFilter(GameBet::query(), $dateFrom, $dateTo);
-        $games = $this->dateFilter(GameRound::query(), $dateFrom, $dateTo);
-        $walletTransactions = $this->dateFilter(WalletTransaction::query(), $dateFrom, $dateTo);
+        $moneyRequests = $this->dateFilter($this->safeQuery(MoneyRequest::class), $dateFrom, $dateTo);
+        $withdrawals = $this->dateFilter($this->safeQuery(WithdrawalRequest::class), $dateFrom, $dateTo);
+        $bets = $this->dateFilter($this->safeQuery(GameBet::class), $dateFrom, $dateTo);
+        $games = $this->dateFilter($this->safeQuery(GameRound::class), $dateFrom, $dateTo);
+        $walletTransactions = $this->dateFilter($this->safeQuery(WalletTransaction::class), $dateFrom, $dateTo);
 
         $totalLoading = (float) (clone $moneyRequests)
             ->where('status', 'approved')
@@ -34,50 +34,38 @@ class AdminMonitoringController extends Controller
             ->where('status', 'approved')
             ->sum('amount');
 
-        $totalBets = (float) (clone $bets)->sum('amount');
+        $validBets = (clone $bets)
+            ->whereNotIn('status', ['refunded', 'cancelled'])
+            ->when(Schema::hasTable('game_rounds'), function ($query) {
+                $query->whereNotIn('game_round_id', function ($subQuery) {
+                    $subQuery->select('id')
+                        ->from('game_rounds')
+                        ->where('winning_side', 'cancelled');
+                });
+            });
 
-        $totalDrawBet = (float) (clone $bets)
+        $totalBets = (float) (clone $validBets)->sum('amount');
+
+        $totalDrawBet = (float) (clone $validBets)
             ->where('side', 'draw')
             ->sum('amount');
 
-        $totalDrawWin = $this->drawWinAmount($dateFrom, $dateTo);
+        $totalDrawWin = (float) (clone $bets)
+            ->where('side', 'draw')
+            ->whereIn('status', ['won', 'paid'])
+            ->when(Schema::hasTable('game_rounds'), function ($query) {
+                $query->whereNotIn('game_round_id', function ($subQuery) {
+                    $subQuery->select('id')
+                        ->from('game_rounds')
+                        ->where('winning_side', 'cancelled');
+                });
+            })
+            ->sum('payout_amount');
 
-        /*
-        |--------------------------------------------------------------------------
-        | Commission Computation
-        |--------------------------------------------------------------------------
-        | Total commission = 5%
-        | Company commission = 3%
-        | Agent commission = 2%
-        |--------------------------------------------------------------------------
-        */
-
-        $totalCommission = (float) (clone $games)->sum('commission_amount');
-
-        if ($totalCommission <= 0) {
-            $totalCommission = round($totalBets * 0.05, 2);
-        }
-
-        $companyCommission = (float) (clone $games)->sum('company_commission_amount');
-
-        if ($companyCommission <= 0) {
-            $companyCommission = round($totalBets * 0.03, 2);
-        }
-
-        $agentCommission = (float) (clone $games)->sum('agent_commission_amount');
-
-        if ($agentCommission <= 0) {
-            $agentCommission = round($totalBets * 0.02, 2);
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | Commission Converted To Load
-        |--------------------------------------------------------------------------
-        | Agent commission converted to normal load wallet.
-        | Usually this is CREDIT to wallet_transactions.
-        |--------------------------------------------------------------------------
-        */
+       $companyCommission = round($totalBets * 0.03, 2);
+$agentCommission = round($totalBets * 0.02, 2);
+$totalCommission = round($totalBets * 0.05, 2);
+$totalFivePercentCommission = round($companyCommission + $agentCommission, 2);
 
         $totalConvertCommission = (float) (clone $walletTransactions)
             ->whereIn('type', [
@@ -88,17 +76,10 @@ class AdminMonitoringController extends Controller
                 'convert_commission',
                 'converted_commission',
                 'commission_to_load',
+                'commission_converted_to_load',
             ])
             ->where('direction', 'credit')
             ->sum('amount');
-
-        /*
-        |--------------------------------------------------------------------------
-        | Commission Cashout / Commission Withdrawal
-        |--------------------------------------------------------------------------
-        | Usually this is DEBIT from commission balance.
-        |--------------------------------------------------------------------------
-        */
 
         $totalCommissionCashOut = (float) (clone $walletTransactions)
             ->whereIn('type', [
@@ -107,30 +88,28 @@ class AdminMonitoringController extends Controller
                 'cashout_commission',
                 'commission_withdrawal',
                 'agent_commission_withdrawal',
+                'commission_withdrawal_request',
             ])
             ->where('direction', 'debit')
             ->sum('amount');
 
-        /*
-        |--------------------------------------------------------------------------
-        | Initial Wallet
-        |--------------------------------------------------------------------------
-        | If date_from is selected, this computes wallet at the start of that day.
-        | Formula:
-        | current wallet - transactions from selected day until now.
-        |
-        | If no date_from, it uses initial_wallet_balance if column exists.
-        |--------------------------------------------------------------------------
-        */
+        $actualWallet = Schema::hasTable('users') && Schema::hasColumn('users', 'wallet_balance')
+            ? (float) User::query()->sum('wallet_balance')
+            : 0;
 
-        $actualWallet = (float) User::query()->sum('wallet_balance');
         $initialWallet = $this->initialWalletAmount($dateFrom);
 
-        $totalPayout = (float) (clone $walletTransactions)
-            ->whereIn('type', ['payout', 'refund'])
-            ->where('direction', 'credit')
-            ->sum('amount');
+      $totalPayout = (float) (clone $walletTransactions)
+    ->whereIn('type', [
+        'payout',
+        'refund',
+        'bet_refund',
+    ])
+    ->where('direction', 'credit')
+    ->sum('amount');
 
+$totalDrawBet = $totalBets;
+$totalDrawWin = round($totalBets - ($totalBets * 0.05), 2);
         $mustTotalWallet = round(
             $initialWallet
             + $totalLoading
@@ -171,7 +150,7 @@ class AdminMonitoringController extends Controller
             [
                 'label' => 'Total Bets',
                 'value' => $totalBets,
-                'sub' => 'All player bets',
+                'sub' => 'All valid player bets',
                 'tone' => 'white',
             ],
             [
@@ -200,14 +179,14 @@ class AdminMonitoringController extends Controller
             ],
             [
                 'label' => 'Total of 5% Commission',
-                'value' => $companyCommission + $agentCommission,
+                'value' => $totalFivePercentCommission,
                 'sub' => 'Company + agent',
                 'tone' => 'green',
             ],
             [
                 'label' => 'Total Draw Bet',
                 'value' => $totalDrawBet,
-                'sub' => 'Draw side total bets',
+                'sub' => 'Draw side valid bets',
                 'tone' => 'purple',
             ],
             [
@@ -242,11 +221,32 @@ class AdminMonitoringController extends Controller
             ],
         ];
 
+        $daily = $this->dailyOverview($dateFrom, $dateTo);
+
         return view('admin.monitoring.overview', [
             'cards' => $cards,
-            'daily' => $this->dailyOverview($dateFrom, $dateTo),
+            'daily' => $daily,
+            'dailyOverview' => $daily,
+
             'dateFrom' => $dateFrom,
             'dateTo' => $dateTo,
+
+            'totalLoading' => $totalLoading,
+            'totalWithdrawal' => $totalWithdrawal,
+            'totalConvertCommission' => $totalConvertCommission,
+            'totalCommissionCashOut' => $totalCommissionCashOut,
+            'totalBets' => $totalBets,
+            'totalCommission' => $totalCommission,
+            'totalAgentCommission' => $agentCommission,
+            'agentCommission' => $agentCommission,
+            'companyCommission' => $companyCommission,
+            'totalFivePercentCommission' => $totalFivePercentCommission,
+            'totalDrawBet' => $totalDrawBet,
+            'totalDrawWin' => $totalDrawWin,
+            'initialWallet' => $initialWallet,
+            'actualWallet' => $actualWallet,
+            'mustTotalWallet' => $mustTotalWallet,
+            'walletDifference' => $walletDifference,
         ]);
     }
 
@@ -256,11 +256,16 @@ class AdminMonitoringController extends Controller
 
         $query = $this->dateFilter($query, $request->date_from, $request->date_to);
 
+        if ($request->filled('direction')) {
+            $query->where('direction', $request->direction);
+        }
+
         if ($request->filled('search')) {
             $search = $request->search;
 
             $query->where(function ($q) use ($search) {
                 $q->where('type', 'like', "%{$search}%")
+                    ->orWhere('direction', 'like', "%{$search}%")
                     ->orWhere('description', 'like', "%{$search}%")
                     ->orWhereHas('user', function ($userQuery) use ($search) {
                         $userQuery->where('name', 'like', "%{$search}%")
@@ -269,294 +274,234 @@ class AdminMonitoringController extends Controller
             });
         }
 
-        if ($request->filled('direction')) {
-            $query->where('direction', $request->direction);
-        }
-
-        if ($request->filled('type')) {
-            $query->where('type', $request->type);
-        }
+        $transactions = $query
+            ->paginate(30)
+            ->withQueryString();
 
         return view('admin.monitoring.activity-logs', [
-            'logs' => $query->paginate(30)->withQueryString(),
+            'logs' => $transactions,
+            'transactions' => $transactions,
+            'walletTransactions' => $transactions,
+            'dateFrom' => $request->date_from,
+            'dateTo' => $request->date_to,
+            'search' => $request->search,
         ]);
     }
 
     public function agentHierarchy(Request $request)
     {
-        $playerColumns = [
-            'id',
-            'name',
-            'email',
-            'agent_id',
-            'wallet_balance',
-            'is_active',
-            'created_at',
-        ];
-
-        if (Schema::hasColumn('users', 'phone')) {
-            $playerColumns[] = 'phone';
-        }
-
         $agents = User::query()
             ->where('role', 'agent')
-            ->with([
-                'players' => function ($query) use ($playerColumns) {
-                    $query->select($playerColumns)
-                        ->where('role', 'player')
-                        ->orderBy('name');
-                },
-            ])
-            ->withCount([
-                'players as total_players_count',
-            ])
             ->when($request->filled('search'), function ($query) use ($request) {
                 $search = $request->search;
 
-                $query->where(function ($q) use ($search) {
+                $matchingPlayerAgentIds = User::query()
+                    ->where('role', 'player')
+                    ->where(function ($playerQuery) use ($search) {
+                        $playerQuery->where('name', 'like', "%{$search}%")
+                            ->orWhere('email', 'like', "%{$search}%")
+                            ->orWhere('phone', 'like', "%{$search}%");
+                    })
+                    ->whereNotNull('agent_id')
+                    ->pluck('agent_id');
+
+                $query->where(function ($q) use ($search, $matchingPlayerAgentIds) {
                     $q->where('name', 'like', "%{$search}%")
                         ->orWhere('email', 'like', "%{$search}%")
                         ->orWhere('agent_code', 'like', "%{$search}%")
-                        ->orWhereHas('players', function ($playerQuery) use ($search) {
-                            $playerQuery->where('name', 'like', "%{$search}%")
-                                ->orWhere('email', 'like', "%{$search}%");
-
-                            if (Schema::hasColumn('users', 'phone')) {
-                                $playerQuery->orWhere('phone', 'like', "%{$search}%");
-                            }
-                        });
+                        ->orWhereIn('id', $matchingPlayerAgentIds);
                 });
             })
-            ->orderBy('name')
-            ->paginate(20)
+            ->latest()
+            ->paginate(30)
             ->withQueryString();
 
-        $agents->getCollection()->transform(function ($agent) use ($request) {
-            $playerIds = $agent->players->pluck('id');
+        foreach ($agents as $agent) {
+            $players = User::query()
+                ->where('role', 'player')
+                ->where('agent_id', $agent->id)
+                ->orderBy('name')
+                ->get()
+                ->map(function ($player) {
+                    $playerTotalBets = $this->validBetsForPlayerIds(collect([$player->id]))->sum('amount');
 
-            $playerBetTotals = collect();
+                    $player->total_bets = (float) $playerTotalBets;
+                    $player->total_player_bets = (float) $playerTotalBets;
+                    $player->agent_commission_amount = round((float) $playerTotalBets * 0.02, 2);
 
-            if ($playerIds->isNotEmpty()) {
-                $betsQuery = GameBet::query()
-                    ->selectRaw('user_id, SUM(amount) as total_bets')
-                    ->whereIn('user_id', $playerIds)
-                    ->groupBy('user_id');
+                    return $player;
+                });
 
-                $betsQuery = $this->dateFilter($betsQuery, $request->date_from, $request->date_to);
+            $agentTotalBets = (float) $players->sum('total_bets');
+            $agentCommission = round($agentTotalBets * 0.02, 2);
 
-                $playerBetTotals = $betsQuery->pluck('total_bets', 'user_id');
-            }
+            $agent->players = $players;
+            $agent->players_count = $players->count();
+            $agent->total_players_count = $players->count();
 
-            $agentTotalBets = 0;
+            $agent->players_wallet_sum = Schema::hasColumn('users', 'wallet_balance')
+                ? (float) $players->sum('wallet_balance')
+                : 0;
 
-            $agent->players->transform(function ($player) use ($playerBetTotals, &$agentTotalBets) {
-                $totalBet = (float) ($playerBetTotals[$player->id] ?? 0);
-
-                $player->total_bets = $totalBet;
-                $player->agent_commission_amount = round($totalBet * 0.02, 2);
-
-                $agentTotalBets += $totalBet;
-
-                return $player;
-            });
-
+            $agent->players_total_bets = $agentTotalBets;
             $agent->total_player_bets = $agentTotalBets;
-            $agent->agent_commission_rate = 2;
-            $agent->agent_commission_amount = round($agentTotalBets * 0.02, 2);
+            $agent->computed_agent_commission = $agentCommission;
+            $agent->agent_commission_amount = $agentCommission;
 
-            return $agent;
-        });
+            $agent->wallet_balance = (float) ($agent->wallet_balance ?? 0);
+            $agent->commission_balance = (float) ($agent->commission_balance ?? 0);
+            $agent->is_active = (bool) ($agent->is_active ?? true);
+        }
 
         return view('admin.monitoring.agent-hierarchy', [
             'agents' => $agents,
-            'dateFrom' => $request->date_from,
-            'dateTo' => $request->date_to,
+            'totalAgents' => method_exists($agents, 'total') ? $agents->total() : $agents->count(),
+            'visiblePlayers' => collect($agents->items())->sum('total_players_count'),
+            'visibleAgentWallet' => collect($agents->items())->sum('wallet_balance'),
+            'visiblePlayerBets' => collect($agents->items())->sum('total_player_bets'),
+            'visibleAgentCommission' => collect($agents->items())->sum('computed_agent_commission'),
         ]);
     }
 
     public function agentReports(Request $request)
     {
-        $collection = $this->agentReportCollection($request);
-        $agents = PaginationHelper::paginateCollection($collection, 20);
+        $dateFrom = $request->date_from;
+        $dateTo = $request->date_to;
+
+        $agents = User::where('role', 'agent')
+            ->latest()
+            ->get()
+            ->map(function ($agent) use ($dateFrom, $dateTo) {
+                $playerIds = User::where('role', 'player')
+                    ->where('agent_id', $agent->id)
+                    ->pluck('id');
+
+                $validBets = $this->validBetsForPlayerIds($playerIds, $dateFrom, $dateTo);
+
+                $totalBets = (float) $validBets->sum('amount');
+                $agentCommission = round($totalBets * 0.02, 2);
+
+                return [
+                    'agent' => $agent,
+                    'players_count' => $playerIds->count(),
+                    'total_bets' => $totalBets,
+                    'agent_commission' => $agentCommission,
+                ];
+            });
+
+        $totalPlayerBets = (float) $agents->sum('total_bets');
+        $totalAgentCommission = (float) $agents->sum('agent_commission');
 
         return view('admin.monitoring.agent-reports', [
             'agents' => $agents,
-            'totalAgentCommission' => $collection->sum('computed_agent_commission'),
-            'totalPlayerBets' => $collection->sum('total_player_bets'),
+            'dateFrom' => $dateFrom,
+            'dateTo' => $dateTo,
+            'totalPlayerBets' => $totalPlayerBets,
+            'totalAgentCommission' => $totalAgentCommission,
         ]);
     }
 
-    public function exportAgentReports(Request $request)
+    public function exportAgentReports(Request $request): StreamedResponse
     {
-        $agents = $this->agentReportCollection($request);
+        $dateFrom = $request->date_from;
+        $dateTo = $request->date_to;
 
-        $filename = 'agent-report-' . now()->format('Y-m-d-His') . '.csv';
+        $fileName = 'agent-reports-' . now()->format('Y-m-d-His') . '.csv';
 
-        return response()->streamDownload(function () use ($agents) {
+        $agents = User::where('role', 'agent')
+            ->latest()
+            ->get();
+
+        return response()->streamDownload(function () use ($agents, $dateFrom, $dateTo) {
             $handle = fopen('php://output', 'w');
 
             fputcsv($handle, [
-                'Agent Name',
+                'Agent',
                 'Email',
-                'Agent Code',
-                'Players',
-                'Wallet Balance',
-                'Commission Balance',
-                'Total Player Bets',
-                'Agent Commission 2%',
-                'Status',
+                'Players Count',
+                'Total Bets',
+                'Agent Commission',
             ]);
 
             foreach ($agents as $agent) {
+                $playerIds = User::where('role', 'player')
+                    ->where('agent_id', $agent->id)
+                    ->pluck('id');
+
+                $validBets = $this->validBetsForPlayerIds($playerIds, $dateFrom, $dateTo);
+
+                $totalBets = (float) $validBets->sum('amount');
+                $agentCommission = round($totalBets * 0.02, 2);
+
                 fputcsv($handle, [
                     $agent->name,
                     $agent->email,
-                    $agent->agent_code,
-                    $agent->total_players_count,
-                    $agent->wallet_balance,
-                    $agent->commission_balance ?? 0,
-                    $agent->total_player_bets,
-                    $agent->computed_agent_commission,
-                    $agent->is_active ? 'Active' : 'Inactive',
+                    $playerIds->count(),
+                    number_format($totalBets, 2, '.', ''),
+                    number_format($agentCommission, 2, '.', ''),
                 ]);
             }
 
             fclose($handle);
-        }, $filename, [
-            'Content-Type' => 'text/csv',
-        ]);
+        }, $fileName);
     }
 
-    private function agentReportCollection(Request $request)
+    private function validBetsForPlayerIds($playerIds, $dateFrom = null, $dateTo = null)
     {
-        return User::query()
-            ->where('role', 'agent')
-            ->withCount([
-                'players as total_players_count',
-            ])
-            ->when($request->filled('search'), function ($query) use ($request) {
-                $search = $request->search;
+        if (!Schema::hasTable('game_bets') || collect($playerIds)->isEmpty()) {
+            return collect();
+        }
 
-                $query->where(function ($q) use ($search) {
-                    $q->where('name', 'like', "%{$search}%")
-                        ->orWhere('email', 'like', "%{$search}%")
-                        ->orWhere('agent_code', 'like', "%{$search}%");
-                });
-            })
-            ->get()
-            ->map(function ($agent) use ($request) {
-                $playerIds = User::where('agent_id', $agent->id)
-                    ->where('role', 'player')
-                    ->pluck('id');
+        $query = GameBet::query();
 
-                $betsQuery = GameBet::whereIn('user_id', $playerIds);
-                $betsQuery = $this->dateFilter($betsQuery, $request->date_from, $request->date_to);
+        if (Schema::hasColumn('game_bets', 'user_id') && Schema::hasColumn('game_bets', 'player_id')) {
+            $query->where(function ($q) use ($playerIds) {
+                $q->whereIn('user_id', $playerIds)
+                    ->orWhereIn('player_id', $playerIds);
+            });
+        } elseif (Schema::hasColumn('game_bets', 'user_id')) {
+            $query->whereIn('user_id', $playerIds);
+        } elseif (Schema::hasColumn('game_bets', 'player_id')) {
+            $query->whereIn('player_id', $playerIds);
+        }
 
-                $totalPlayerBets = (float) $betsQuery->sum('amount');
+        if (Schema::hasColumn('game_bets', 'status')) {
+            $query->whereNotIn('status', ['refunded', 'cancelled']);
+        }
 
-                $agent->total_player_bets = $totalPlayerBets;
+        if (
+            Schema::hasTable('game_rounds') &&
+            Schema::hasColumn('game_bets', 'game_round_id') &&
+            Schema::hasColumn('game_rounds', 'winning_side')
+        ) {
+            $query->whereNotIn('game_round_id', function ($subQuery) {
+                $subQuery->select('id')
+                    ->from('game_rounds')
+                    ->where('winning_side', 'cancelled');
+            });
+        }
 
-                /*
-                |--------------------------------------------------------------------------
-                | Display Computed Agent Commission
-                |--------------------------------------------------------------------------
-                | If actual commission_balance exists and has value, we still show computed 2%.
-                | The actual balance is shown in views as commission_balance.
-                |--------------------------------------------------------------------------
-                */
+        $query = $this->dateFilter($query, $dateFrom, $dateTo);
 
-                $agent->computed_agent_commission = round($totalPlayerBets * 0.02, 2);
-
-                return $agent;
-            })
-            ->sortByDesc('computed_agent_commission')
-            ->values();
+        return $query->get();
     }
 
-    private function dailyOverview(?string $dateFrom, ?string $dateTo)
+    private function dateFilter($query, $dateFrom = null, $dateTo = null)
     {
-        return $this->dateFilter(GameRound::query(), $dateFrom, $dateTo)
-            ->get()
-            ->groupBy(fn ($game) => optional($game->created_at)->format('Y-m-d') ?? 'No Date')
-            ->map(function ($items, $date) {
-                $totalPool = $items->sum(fn ($game) => (float) ($game->total_pool ?? 0));
-                $totalBets = $items->sum(function ($game) {
-                    return (float) ($game->meron_total ?? 0)
-                        + (float) ($game->wala_total ?? 0)
-                        + (float) ($game->draw_total ?? 0);
-                });
-
-                $commission = $items->sum(fn ($game) => (float) ($game->commission_amount ?? 0));
-
-                if ($commission <= 0) {
-                    $commission = round($totalBets * 0.05, 2);
-                }
-
-                $companyCommission = $items->sum(fn ($game) => (float) ($game->company_commission_amount ?? 0));
-
-                if ($companyCommission <= 0) {
-                    $companyCommission = round($totalBets * 0.03, 2);
-                }
-
-                $agentCommission = $items->sum(fn ($game) => (float) ($game->agent_commission_amount ?? 0));
-
-                if ($agentCommission <= 0) {
-                    $agentCommission = round($totalBets * 0.02, 2);
-                }
-
-                return [
-                    'date' => $date,
-                    'games' => $items->count(),
-                    'total_pool' => $totalPool,
-                    'company_commission' => $companyCommission,
-                    'agent_commission' => $agentCommission,
-                    'total_commission' => $commission,
-                    'net_pool' => $items->sum(fn ($game) => (float) ($game->net_pool ?? 0)),
-                    'payout_total' => $items->sum(fn ($game) => (float) ($game->payout_total ?? 0)),
-                ];
+        return $query
+            ->when($dateFrom, function ($query) use ($dateFrom) {
+                $query->whereDate('created_at', '>=', $dateFrom);
             })
-            ->sortByDesc('date')
-            ->values();
+            ->when($dateTo, function ($query) use ($dateTo) {
+                $query->whereDate('created_at', '<=', $dateTo);
+            });
     }
 
-    private function drawWinAmount(?string $dateFrom, ?string $dateTo): float
+    private function initialWalletAmount($dateFrom = null): float
     {
-        $drawGames = $this->dateFilter(GameRound::query(), $dateFrom, $dateTo)
-            ->where('winning_side', 'draw')
-            ->pluck('id');
-
-        if ($drawGames->isEmpty()) {
+        if (!Schema::hasTable('users') || !Schema::hasColumn('users', 'wallet_balance')) {
             return 0;
         }
-
-        $betIds = GameBet::whereIn('game_round_id', $drawGames)
-            ->where('side', 'draw')
-            ->pluck('id');
-
-        if ($betIds->isEmpty()) {
-            return 0;
-        }
-
-        $query = WalletTransaction::query()
-            ->whereIn('type', ['payout', 'refund'])
-            ->where('direction', 'credit');
-
-        if (Schema::hasColumn('wallet_transactions', 'reference_id')) {
-            $query->whereIn('reference_id', $betIds);
-        }
-
-        return (float) $query->sum('amount');
-    }
-
-    private function initialWalletAmount(?string $dateFrom): float
-    {
-        /*
-        |--------------------------------------------------------------------------
-        | No Date Filter
-        |--------------------------------------------------------------------------
-        | Use initial_wallet_balance column if available.
-        |--------------------------------------------------------------------------
-        */
 
         if (!$dateFrom) {
             if (Schema::hasColumn('users', 'initial_wallet_balance')) {
@@ -566,46 +511,89 @@ class AdminMonitoringController extends Controller
             return (float) User::query()->sum('wallet_balance');
         }
 
-        /*
-        |--------------------------------------------------------------------------
-        | With Date Filter
-        |--------------------------------------------------------------------------
-        | Wallet at start of date_from:
-        | current balance - all wallet movement from date_from 00:00:00 until now.
-        |--------------------------------------------------------------------------
-        */
+        $currentWallet = (float) User::query()->sum('wallet_balance');
 
-        $actualWallet = (float) User::query()->sum('wallet_balance');
+        if (!Schema::hasTable('wallet_transactions')) {
+            return $currentWallet;
+        }
 
-        $transactionsFromDate = WalletTransaction::query()
+        $transactionsAfterDate = WalletTransaction::query()
             ->whereDate('created_at', '>=', $dateFrom)
             ->get();
 
-        $netMovement = $transactionsFromDate->sum(function ($transaction) {
+        $movement = 0;
+
+        foreach ($transactionsAfterDate as $transaction) {
             $amount = (float) $transaction->amount;
 
             if ($transaction->direction === 'credit') {
-                return $amount;
+                $movement += $amount;
             }
 
             if ($transaction->direction === 'debit') {
-                return -$amount;
+                $movement -= $amount;
             }
+        }
 
-            return 0;
-        });
-
-        return round($actualWallet - $netMovement, 2);
+        return round($currentWallet - $movement, 2);
     }
 
-    private function dateFilter($query, ?string $dateFrom, ?string $dateTo)
+    private function drawWinAmount($dateFrom = null, $dateTo = null): float
     {
-        return $query
-            ->when($dateFrom, function ($q) use ($dateFrom) {
-                $q->whereDate('created_at', '>=', $dateFrom);
+        return (float) $this->dateFilter(GameBet::query(), $dateFrom, $dateTo)
+            ->where('side', 'draw')
+            ->whereIn('status', ['won', 'paid'])
+            ->when(Schema::hasTable('game_rounds'), function ($query) {
+                $query->whereNotIn('game_round_id', function ($subQuery) {
+                    $subQuery->select('id')
+                        ->from('game_rounds')
+                        ->where('winning_side', 'cancelled');
+                });
             })
-            ->when($dateTo, function ($q) use ($dateTo) {
-                $q->whereDate('created_at', '<=', $dateTo);
-            });
+            ->sum('payout_amount');
+    }
+
+    private function dailyOverview($dateFrom = null, $dateTo = null)
+    {
+        if (!Schema::hasTable('game_bets')) {
+            return collect();
+        }
+
+        return $this->dateFilter(GameBet::query(), $dateFrom, $dateTo)
+            ->when(Schema::hasTable('game_rounds'), function ($query) {
+                $query->whereNotIn('game_round_id', function ($subQuery) {
+                    $subQuery->select('id')
+                        ->from('game_rounds')
+                        ->where('winning_side', 'cancelled');
+                });
+            })
+            ->selectRaw('DATE(created_at) as date')
+            ->selectRaw("SUM(CASE WHEN status NOT IN ('refunded', 'cancelled') THEN amount ELSE 0 END) as total_bets")
+            ->selectRaw("SUM(CASE WHEN side = 'draw' AND status NOT IN ('refunded', 'cancelled') THEN amount ELSE 0 END) as total_draw_bet")
+            ->selectRaw("SUM(CASE WHEN side = 'draw' AND status IN ('won', 'paid') THEN payout_amount ELSE 0 END) as total_draw_win")
+            ->groupByRaw('DATE(created_at)')
+            ->orderByRaw('DATE(created_at) DESC')
+            ->get();
+    }
+
+    private function safeQuery(string $modelClass)
+    {
+        $model = new $modelClass;
+        $table = $model->getTable();
+
+        if (!Schema::hasTable($table)) {
+            return $modelClass::query()->whereRaw('1 = 0');
+        }
+
+        return $modelClass::query();
+    }
+
+    private function sumIfColumnExists($query, string $table, string $column): float
+    {
+        if (!Schema::hasTable($table) || !Schema::hasColumn($table, $column)) {
+            return 0;
+        }
+
+        return (float) (clone $query)->sum($column);
     }
 }

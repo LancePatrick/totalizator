@@ -7,205 +7,200 @@ use App\Models\GameBet;
 use App\Models\GameRound;
 use App\Models\WalletTransaction;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Schema;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class AdminReportController extends Controller
 {
     public function games(Request $request)
     {
-        $gamesQuery = $this->gameReportQuery($request);
+        $search = $request->search;
+        $status = $request->status;
+        $winner = $request->winner;
+        $dateFrom = $request->date_from;
+        $dateTo = $request->date_to;
 
-        $games = (clone $gamesQuery)
-            ->latest('id')
-            ->paginate(20)
-            ->withQueryString();
+        $gamesQuery = GameRound::query()
+            ->when($search, function ($query) use ($search) {
+                $query->where(function ($q) use ($search) {
+                    $q->where('id', $search)
+                        ->orWhere('round_name', 'like', "%{$search}%")
+                        ->orWhere('round_number', 'like', "%{$search}%")
+                        ->orWhere('title', 'like', "%{$search}%")
+                        ->orWhere('round_code', 'like', "%{$search}%");
+                });
+            })
+            ->when($status && $status !== 'all', function ($query) use ($status) {
+                $query->where('status', $status);
+            })
+            ->when($winner && $winner !== 'all', function ($query) use ($winner) {
+                $query->where('winning_side', $winner);
+            })
+            ->when($dateFrom, function ($query) use ($dateFrom) {
+                $query->whereDate('created_at', '>=', $dateFrom);
+            })
+            ->when($dateTo, function ($query) use ($dateTo) {
+                $query->whereDate('created_at', '<=', $dateTo);
+            })
+            ->latest('id');
 
-        $allGames = (clone $gamesQuery)->get();
+        $gamesForTotals = (clone $gamesQuery)->get();
 
-        $totalGames = $allGames->count();
-
-        $meronTotal = 0;
-        $walaTotal = 0;
-        $drawTotal = 0;
-
-        $totalPool = 0;
-        $commissionEarned = 0;
-        $netPool = 0;
-        $payoutTotal = 0;
-        $adminIncome = 0;
-
-        foreach ($allGames as $game) {
-            $computed = $this->computeGameAmounts($game);
-
-            $meronTotal += $computed['meron_total'];
-            $walaTotal += $computed['wala_total'];
-            $drawTotal += $computed['draw_total'];
-
-            $totalPool += $computed['total_pool'];
-            $commissionEarned += $computed['commission_amount'];
-            $netPool += $computed['net_pool'];
-            $payoutTotal += $computed['payout_total'];
-            $adminIncome += $computed['admin_income'];
-
-            /*
-            |--------------------------------------------------------------------------
-            | Attach computed values to each game
-            |--------------------------------------------------------------------------
-            | This makes your existing blade display correct values even if the
-            | database columns are still 0.
-            */
-            $game->meron_total = $computed['meron_total'];
-            $game->wala_total = $computed['wala_total'];
-            $game->draw_total = $computed['draw_total'];
-            $game->total_pool = $computed['total_pool'];
-            $game->commission_amount = $computed['commission_amount'];
-            $game->net_pool = $computed['net_pool'];
-            $game->payout_total = $computed['payout_total'];
-            $game->admin_income = $computed['admin_income'];
-        }
+        $gameIds = $gamesForTotals->pluck('id');
 
         /*
         |--------------------------------------------------------------------------
-        | Also update paginated games with computed values
+        | Valid Bets Only
+        |--------------------------------------------------------------------------
+        | Cancelled/refunded bets should not be counted as real total pool.
         |--------------------------------------------------------------------------
         */
-        $games->getCollection()->transform(function ($game) {
-            $computed = $this->computeGameAmounts($game);
 
-            $game->meron_total = $computed['meron_total'];
-            $game->wala_total = $computed['wala_total'];
-            $game->draw_total = $computed['draw_total'];
-            $game->total_pool = $computed['total_pool'];
-            $game->commission_amount = $computed['commission_amount'];
-            $game->net_pool = $computed['net_pool'];
-            $game->payout_total = $computed['payout_total'];
-            $game->admin_income = $computed['admin_income'];
+        $validBetsQuery = GameBet::query()
+            ->whereIn('game_round_id', $gameIds)
+            ->whereNotIn('status', ['refunded', 'cancelled'])
+            ->whereNotIn('game_round_id', function ($query) {
+                $query->select('id')
+                    ->from('game_rounds')
+                    ->where('winning_side', 'cancelled');
+            });
 
-            return $game;
-        });
+        $totalPool = (float) (clone $validBetsQuery)->sum('amount');
+
+        $meronTotal = (float) (clone $validBetsQuery)
+            ->where('side', 'meron')
+            ->sum('amount');
+
+        $walaTotal = (float) (clone $validBetsQuery)
+            ->where('side', 'wala')
+            ->sum('amount');
+
+        $drawTotal = (float) (clone $validBetsQuery)
+            ->where('side', 'draw')
+            ->sum('amount');
+
+        /*
+        |--------------------------------------------------------------------------
+        | Valid Games Only For Earnings
+        |--------------------------------------------------------------------------
+        | Cancelled games should not add commission, admin income, or payout.
+        |--------------------------------------------------------------------------
+        */
+
+        $validGamesForTotals = $gamesForTotals
+            ->filter(function ($game) {
+                return $game->winning_side !== 'cancelled';
+            });
+
+        $totalGames = $validGamesForTotals->count();
+
+        $commissionEarned = $this->sumGameColumn($validGamesForTotals, 'commission_amount');
+
+        if ($commissionEarned <= 0 && $totalPool > 0) {
+            $commissionEarned = round($totalPool * 0.05, 2);
+        }
+
+        $adminIncome = $this->sumGameColumn($validGamesForTotals, 'admin_income');
+
+        if ($adminIncome <= 0) {
+            $adminIncome = $commissionEarned;
+        }
+
+        $netPool = $totalPool > 0
+            ? round($totalPool - $commissionEarned, 2)
+            : 0;
+
+        /*
+        |--------------------------------------------------------------------------
+        | Payout Total
+        |--------------------------------------------------------------------------
+        | Only real winners. Refunds from cancelled games are not report earnings.
+        |--------------------------------------------------------------------------
+        */
+
+        $payoutTotal = (float) GameBet::query()
+            ->whereIn('game_round_id', $gameIds)
+            ->whereIn('status', ['won', 'paid'])
+            ->whereNotIn('game_round_id', function ($query) {
+                $query->select('id')
+                    ->from('game_rounds')
+                    ->where('winning_side', 'cancelled');
+            })
+            ->sum('payout_amount');
 
         $averageIncomePerGame = $totalGames > 0
             ? round($adminIncome / $totalGames, 2)
             : 0;
 
-        $dailyEarnings = $allGames
-            ->groupBy(function ($game) {
-                return optional($game->created_at)->format('Y-m-d') ?? 'No Date';
-            })
-            ->map(function ($items, $date) {
-                $gamesCount = $items->count();
+        $dailyEarnings = $this->buildDailyEarnings($gameIds);
 
-                $totalPool = 0;
-                $commission = 0;
-                $netPool = 0;
-                $payoutTotal = 0;
-                $adminIncome = 0;
-
-                foreach ($items as $game) {
-                    $computed = $this->computeGameAmounts($game);
-
-                    $totalPool += $computed['total_pool'];
-                    $commission += $computed['commission_amount'];
-                    $netPool += $computed['net_pool'];
-                    $payoutTotal += $computed['payout_total'];
-                    $adminIncome += $computed['admin_income'];
-                }
-
-                return [
-                    'date' => $date,
-                    'games' => $gamesCount,
-                    'total_pool' => round($totalPool, 2),
-                    'commission' => round($commission, 2),
-                    'net_pool' => round($netPool, 2),
-                    'payout_total' => round($payoutTotal, 2),
-                    'admin_income' => round($adminIncome, 2),
-                ];
-            })
-            ->sortByDesc('date')
-            ->values();
+        $games = $gamesQuery
+            ->paginate(20)
+            ->withQueryString();
 
         return view('admin.reports.games', [
             'games' => $games,
 
-            /*
-            |--------------------------------------------------------------------------
-            | These variable names match your Blade
-            |--------------------------------------------------------------------------
-            */
             'totalGames' => $totalGames,
-            'totalPool' => round($totalPool, 2),
-            'commissionEarned' => round($commissionEarned, 2),
-            'netPool' => round($netPool, 2),
-            'payoutTotal' => round($payoutTotal, 2),
-            'adminIncome' => round($adminIncome, 2),
-            'averageIncomePerGame' => round($averageIncomePerGame, 2),
+            'totalPool' => $totalPool,
+            'commissionEarned' => $commissionEarned,
+            'commissionTotal' => $commissionEarned,
+            'netPool' => $netPool,
+            'netPoolTotal' => $netPool,
+            'payoutTotal' => $payoutTotal,
+            'adminIncome' => $adminIncome,
+            'averageIncomePerGame' => $averageIncomePerGame,
+            'averageIncome' => $averageIncomePerGame,
 
-            'meronTotal' => round($meronTotal, 2),
-            'walaTotal' => round($walaTotal, 2),
-            'drawTotal' => round($drawTotal, 2),
+            'meronTotal' => $meronTotal,
+            'walaTotal' => $walaTotal,
+            'drawTotal' => $drawTotal,
 
             'dailyEarnings' => $dailyEarnings,
-
-            /*
-            |--------------------------------------------------------------------------
-            | Extra aliases para hindi mag-error kung may ibang blade variable
-            |--------------------------------------------------------------------------
-            */
-            'commissionTotal' => round($commissionEarned, 2),
-            'netPoolTotal' => round($netPool, 2),
-            'averageIncome' => round($averageIncomePerGame, 2),
             'earningsPerDay' => $dailyEarnings,
-        ]);
-    }
 
-    public function wallet(Request $request)
-    {
-        $transactions = WalletTransaction::query()
-            ->with('user')
-            ->when($request->filled('search'), function ($query) use ($request) {
-                $search = $request->search;
-
-                $query->where(function ($q) use ($search) {
-                    $q->where('type', 'like', "%{$search}%")
-                        ->orWhere('direction', 'like', "%{$search}%")
-                        ->orWhere('description', 'like', "%{$search}%")
-                        ->orWhereHas('user', function ($userQuery) use ($search) {
-                            $userQuery->where('name', 'like', "%{$search}%")
-                                ->orWhere('email', 'like', "%{$search}%");
-                        });
-                });
-            })
-            ->when($request->filled('type'), function ($query) use ($request) {
-                $query->where('type', $request->type);
-            })
-            ->when($request->filled('direction'), function ($query) use ($request) {
-                $query->where('direction', $request->direction);
-            })
-            ->when($request->filled('date_from'), function ($query) use ($request) {
-                $query->whereDate('created_at', '>=', $request->date_from);
-            })
-            ->when($request->filled('date_to'), function ($query) use ($request) {
-                $query->whereDate('created_at', '<=', $request->date_to);
-            });
-
-        $totalCredit = (float) (clone $transactions)->where('direction', 'credit')->sum('amount');
-        $totalDebit = (float) (clone $transactions)->where('direction', 'debit')->sum('amount');
-
-        return view('admin.reports.wallet', [
-            'transactions' => $transactions->latest()->paginate(30)->withQueryString(),
-            'totalCredit' => round($totalCredit, 2),
-            'totalDebit' => round($totalDebit, 2),
-            'netMovement' => round($totalCredit - $totalDebit, 2),
+            'search' => $search,
+            'status' => $status,
+            'winner' => $winner,
+            'dateFrom' => $dateFrom,
+            'dateTo' => $dateTo,
         ]);
     }
 
     public function exportGames(Request $request): StreamedResponse
     {
-        $games = $this->gameReportQuery($request)
+        $search = $request->search;
+        $status = $request->status;
+        $winner = $request->winner;
+        $dateFrom = $request->date_from;
+        $dateTo = $request->date_to;
+
+        $games = GameRound::query()
+            ->when($search, function ($query) use ($search) {
+                $query->where(function ($q) use ($search) {
+                    $q->where('id', $search)
+                        ->orWhere('round_name', 'like', "%{$search}%")
+                        ->orWhere('round_number', 'like', "%{$search}%")
+                        ->orWhere('title', 'like', "%{$search}%")
+                        ->orWhere('round_code', 'like', "%{$search}%");
+                });
+            })
+            ->when($status && $status !== 'all', function ($query) use ($status) {
+                $query->where('status', $status);
+            })
+            ->when($winner && $winner !== 'all', function ($query) use ($winner) {
+                $query->where('winning_side', $winner);
+            })
+            ->when($dateFrom, function ($query) use ($dateFrom) {
+                $query->whereDate('created_at', '>=', $dateFrom);
+            })
+            ->when($dateTo, function ($query) use ($dateTo) {
+                $query->whereDate('created_at', '<=', $dateTo);
+            })
             ->latest('id')
             ->get();
 
-        $fileName = 'game_reports_' . now()->format('Y_m_d_His') . '.csv';
+        $fileName = 'game-reports-' . now()->format('Y-m-d-His') . '.csv';
 
         return response()->streamDownload(function () use ($games) {
             $handle = fopen('php://output', 'w');
@@ -215,40 +210,30 @@ class AdminReportController extends Controller
                 'Round Name',
                 'Round Number',
                 'Status',
-                'Winner',
-                'Meron Total',
-                'Wala Total',
-                'Draw Total',
+                'Winning Side',
                 'Total Pool',
-                'Commission Rate',
                 'Commission',
-                'Final All Bet / Net Pool',
+                'Net Pool',
                 'Payout Total',
                 'Admin Income',
                 'Created At',
-                'Declared At',
             ]);
 
             foreach ($games as $game) {
-                $computed = $this->computeGameAmounts($game);
+                $isCancelled = $game->winning_side === 'cancelled';
 
                 fputcsv($handle, [
                     $game->id,
-                    $game->round_name ?? $game->title ?? 'Game Room',
+                    $game->round_name ?? $game->title ?? 'Game',
                     $game->round_number ?? $game->round_code ?? $game->id,
                     $game->status,
-                    $game->winning_side,
-                    $computed['meron_total'],
-                    $computed['wala_total'],
-                    $computed['draw_total'],
-                    $computed['total_pool'],
-                    $game->commission_rate ?? 5,
-                    $computed['commission_amount'],
-                    $computed['net_pool'],
-                    $computed['payout_total'],
-                    $computed['admin_income'],
+                    $game->winning_side ?? 'N/A',
+                    $isCancelled ? '0.00' : number_format((float) ($game->total_pool ?? 0), 2, '.', ''),
+                    $isCancelled ? '0.00' : number_format((float) ($game->commission_amount ?? 0), 2, '.', ''),
+                    $isCancelled ? '0.00' : number_format((float) ($game->net_pool ?? 0), 2, '.', ''),
+                    $isCancelled ? '0.00' : number_format((float) ($game->payout_total ?? 0), 2, '.', ''),
+                    $isCancelled ? '0.00' : number_format((float) ($game->admin_income ?? 0), 2, '.', ''),
                     optional($game->created_at)->format('Y-m-d H:i:s'),
-                    optional($game->settled_at)->format('Y-m-d H:i:s'),
                 ]);
             }
 
@@ -256,13 +241,28 @@ class AdminReportController extends Controller
         }, $fileName);
     }
 
-    public function exportWallet(Request $request): StreamedResponse
+    public function wallet(Request $request)
     {
-        $transactions = WalletTransaction::query()
-            ->with('user')
-            ->when($request->filled('search'), function ($query) use ($request) {
-                $search = $request->search;
+        $dateFrom = $request->date_from;
+        $dateTo = $request->date_to;
+        $search = $request->search;
+        $type = $request->type;
+        $direction = $request->direction;
 
+        $transactions = WalletTransaction::with('user')
+            ->when($dateFrom, function ($query) use ($dateFrom) {
+                $query->whereDate('created_at', '>=', $dateFrom);
+            })
+            ->when($dateTo, function ($query) use ($dateTo) {
+                $query->whereDate('created_at', '<=', $dateTo);
+            })
+            ->when($type && $type !== 'all', function ($query) use ($type) {
+                $query->where('type', $type);
+            })
+            ->when($direction && $direction !== 'all', function ($query) use ($direction) {
+                $query->where('direction', $direction);
+            })
+            ->when($search, function ($query) use ($search) {
                 $query->where(function ($q) use ($search) {
                     $q->where('type', 'like', "%{$search}%")
                         ->orWhere('direction', 'like', "%{$search}%")
@@ -273,22 +273,49 @@ class AdminReportController extends Controller
                         });
                 });
             })
-            ->when($request->filled('type'), function ($query) use ($request) {
-                $query->where('type', $request->type);
+            ->latest()
+            ->paginate(30)
+            ->withQueryString();
+
+        $summaryQuery = WalletTransaction::query()
+            ->when($dateFrom, function ($query) use ($dateFrom) {
+                $query->whereDate('created_at', '>=', $dateFrom);
             })
-            ->when($request->filled('direction'), function ($query) use ($request) {
-                $query->where('direction', $request->direction);
-            })
-            ->when($request->filled('date_from'), function ($query) use ($request) {
-                $query->whereDate('created_at', '>=', $request->date_from);
-            })
-            ->when($request->filled('date_to'), function ($query) use ($request) {
-                $query->whereDate('created_at', '<=', $request->date_to);
-            })
+            ->when($dateTo, function ($query) use ($dateTo) {
+                $query->whereDate('created_at', '<=', $dateTo);
+            });
+
+        $totalCredit = (float) (clone $summaryQuery)
+            ->where('direction', 'credit')
+            ->sum('amount');
+
+        $totalDebit = (float) (clone $summaryQuery)
+            ->where('direction', 'debit')
+            ->sum('amount');
+
+        $netMovement = round($totalCredit - $totalDebit, 2);
+
+        return view('admin.reports.wallet', [
+            'transactions' => $transactions,
+            'walletTransactions' => $transactions,
+            'totalCredit' => $totalCredit,
+            'totalDebit' => $totalDebit,
+            'netMovement' => $netMovement,
+            'dateFrom' => $dateFrom,
+            'dateTo' => $dateTo,
+            'search' => $search,
+            'type' => $type,
+            'direction' => $direction,
+        ]);
+    }
+
+    public function exportWallet(Request $request): StreamedResponse
+    {
+        $transactions = WalletTransaction::with('user')
             ->latest()
             ->get();
 
-        $fileName = 'wallet_reports_' . now()->format('Y_m_d_His') . '.csv';
+        $fileName = 'wallet-reports-' . now()->format('Y-m-d-His') . '.csv';
 
         return response()->streamDownload(function () use ($transactions) {
             $handle = fopen('php://output', 'w');
@@ -303,19 +330,19 @@ class AdminReportController extends Controller
                 'Balance Before',
                 'Balance After',
                 'Description',
-                'Date',
+                'Created At',
             ]);
 
             foreach ($transactions as $transaction) {
                 fputcsv($handle, [
                     $transaction->id,
-                    $transaction->user?->name ?? 'N/A',
-                    $transaction->user?->email ?? 'N/A',
+                    $transaction->user->name ?? 'N/A',
+                    $transaction->user->email ?? 'N/A',
                     $transaction->type,
                     $transaction->direction,
-                    $transaction->amount,
-                    $transaction->balance_before,
-                    $transaction->balance_after,
+                    number_format((float) $transaction->amount, 2, '.', ''),
+                    number_format((float) ($transaction->balance_before ?? 0), 2, '.', ''),
+                    number_format((float) ($transaction->balance_after ?? 0), 2, '.', ''),
                     $transaction->description,
                     optional($transaction->created_at)->format('Y-m-d H:i:s'),
                 ]);
@@ -325,163 +352,44 @@ class AdminReportController extends Controller
         }, $fileName);
     }
 
-    private function gameReportQuery(Request $request)
+    private function buildDailyEarnings($gameIds)
     {
-        return GameRound::query()
-            ->withCount('bets')
-            ->withSum('bets as bets_total_amount', 'amount')
-            ->where(function ($query) {
-                /*
-                |--------------------------------------------------------------------------
-                | New logic:
-                |--------------------------------------------------------------------------
-                | Since declared rooms stay status=open, reports must include:
-                | - games with winning_side
-                | - games with bets
-                */
-                $query->whereNotNull('winning_side')
-                    ->orWhereHas('bets');
-            })
-            ->when($request->filled('search'), function ($query) use ($request) {
-                $search = $request->search;
+        if ($gameIds->isEmpty()) {
+            return collect();
+        }
 
-                $query->where(function ($q) use ($search) {
-                    $q->where('id', $search)
-                        ->orWhere('round_name', 'like', "%{$search}%")
-                        ->orWhere('round_number', 'like', "%{$search}%")
-                        ->orWhere('title', 'like', "%{$search}%")
-                        ->orWhere('round_code', 'like', "%{$search}%");
-                });
+        return GameBet::query()
+            ->whereIn('game_round_id', $gameIds)
+            ->whereNotIn('status', ['refunded', 'cancelled'])
+            ->whereNotIn('game_round_id', function ($query) {
+                $query->select('id')
+                    ->from('game_rounds')
+                    ->where('winning_side', 'cancelled');
             })
-            ->when($request->filled('status'), function ($query) use ($request) {
-                if ($request->status !== 'all') {
-                    $query->where('status', $request->status);
-                }
-            })
-            ->when($request->filled('winner'), function ($query) use ($request) {
-                if ($request->winner !== 'all') {
-                    $query->where('winning_side', $request->winner);
-                }
-            })
-            ->when($request->filled('winning_side'), function ($query) use ($request) {
-                if ($request->winning_side !== 'all') {
-                    $query->where('winning_side', $request->winning_side);
-                }
-            })
-            ->when($request->filled('date_from'), function ($query) use ($request) {
-                $query->whereDate('created_at', '>=', $request->date_from);
-            })
-            ->when($request->filled('date_to'), function ($query) use ($request) {
-                $query->whereDate('created_at', '<=', $request->date_to);
+            ->selectRaw('DATE(created_at) as date')
+            ->selectRaw('COUNT(DISTINCT game_round_id) as games')
+            ->selectRaw('SUM(amount) as total_pool')
+            ->selectRaw('SUM(amount) * 0.05 as commission')
+            ->selectRaw('SUM(amount) - (SUM(amount) * 0.05) as net_pool')
+            ->selectRaw("SUM(CASE WHEN status IN ('won', 'paid') THEN payout_amount ELSE 0 END) as payout")
+            ->groupByRaw('DATE(created_at)')
+            ->orderByRaw('DATE(created_at) DESC')
+            ->get()
+            ->map(function ($day) {
+                $day->admin_income = round((float) $day->commission, 2);
+                $day->final_all_bet = round((float) $day->net_pool, 2);
+                return $day;
             });
     }
 
-    private function computeGameAmounts(GameRound $game): array
+    private function sumGameColumn($games, string $column): float
     {
-        $betsQuery = GameBet::where('game_round_id', $game->id);
-
-        /*
-        |--------------------------------------------------------------------------
-        | Get totals from actual bets first
-        |--------------------------------------------------------------------------
-        */
-        $meronTotal = (float) (clone $betsQuery)
-            ->where('side', 'meron')
-            ->sum('amount');
-
-        $walaTotal = (float) (clone $betsQuery)
-            ->where('side', 'wala')
-            ->sum('amount');
-
-        $drawTotal = (float) (clone $betsQuery)
-            ->where('side', 'draw')
-            ->sum('amount');
-
-        $betsTotal = $meronTotal + $walaTotal + $drawTotal;
-
-        /*
-        |--------------------------------------------------------------------------
-        | Fallback to game_rounds totals if no bet records found
-        |--------------------------------------------------------------------------
-        */
-        $gameMeron = (float) ($game->meron_total ?? 0);
-        $gameWala = (float) ($game->wala_total ?? 0);
-        $gameDraw = (float) ($game->draw_total ?? 0);
-
-        if ($betsTotal <= 0 && ($gameMeron + $gameWala + $gameDraw) > 0) {
-            $meronTotal = $gameMeron;
-            $walaTotal = $gameWala;
-            $drawTotal = $gameDraw;
-            $betsTotal = $meronTotal + $walaTotal + $drawTotal;
+        if (!Schema::hasTable('game_rounds') || !Schema::hasColumn('game_rounds', $column)) {
+            return 0;
         }
 
-        $totalPool = (float) ($game->total_pool ?? 0);
-
-        if ($totalPool <= 0) {
-            $totalPool = $betsTotal;
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | Commission rate
-        |--------------------------------------------------------------------------
-        */
-        $commissionRate = (float) ($game->commission_rate ?? 5);
-
-        if ($commissionRate > 1) {
-            $commissionRate = $commissionRate / 100;
-        }
-
-        $commissionAmount = (float) ($game->commission_amount ?? 0);
-
-        if ($commissionAmount <= 0 && $totalPool > 0) {
-            $commissionAmount = round($totalPool * $commissionRate, 2);
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | Net pool / Final all bet
-        |--------------------------------------------------------------------------
-        */
-        $netPool = (float) ($game->net_pool ?? 0);
-
-        if ($netPool <= 0 && $totalPool > 0) {
-            $netPool = round($totalPool - $commissionAmount, 2);
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | Payout total
-        |--------------------------------------------------------------------------
-        */
-        $payoutTotal = (float) ($game->payout_total ?? 0);
-
-        if ($payoutTotal <= 0) {
-            $payoutTotal = (float) GameBet::where('game_round_id', $game->id)
-                ->whereIn('status', ['won', 'paid', 'refunded'])
-                ->sum('payout_amount');
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | Admin income
-        |--------------------------------------------------------------------------
-        */
-        $adminIncome = (float) ($game->admin_income ?? 0);
-
-        if ($adminIncome <= 0) {
-            $adminIncome = $commissionAmount;
-        }
-
-        return [
-            'meron_total' => round($meronTotal, 2),
-            'wala_total' => round($walaTotal, 2),
-            'draw_total' => round($drawTotal, 2),
-            'total_pool' => round($totalPool, 2),
-            'commission_amount' => round($commissionAmount, 2),
-            'net_pool' => round($netPool, 2),
-            'payout_total' => round($payoutTotal, 2),
-            'admin_income' => round($adminIncome, 2),
-        ];
+        return (float) $games->sum(function ($game) use ($column) {
+            return (float) ($game->{$column} ?? 0);
+        });
     }
 }

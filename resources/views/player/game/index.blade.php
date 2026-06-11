@@ -205,7 +205,7 @@
 
                 <a
                     href="{{ route('player.game.index') }}"
-                    class="inline-flex h-11 items-center justify-center rounded-2xl bg-slate-950 px-5 text-xs font-black uppercase tracking-wide text-white transition hover:-translate-y-0.5 hover:bg-slate-800"
+                    class="inline-flex h-11 items-center justify-center rounded-2xl bg-slate-100 px-5 text-xs font-black uppercase tracking-wide text-white transition hover:-translate-y-0.5 hover:bg-slate-100"
                 >
                     ← Back to Rooms
                 </a>
@@ -621,28 +621,7 @@
                                 position: relative !important;
                                 opacity: 1 !important;
                                 filter: none !important;
-                            }
-
-                            .road-draw-dot {
-                                position: absolute;
-                                right: -3px;
-                                top: -3px;
-                                width: 10px;
-                                height: 10px;
-                                border-radius: 999px;
-                                background-color: #7c3aed !important;
-                                border: 2px solid white;
-                            }
-
-                            .road-cancel-dot {
-                                position: absolute;
-                                left: -3px;
-                                top: -3px;
-                                width: 10px;
-                                height: 10px;
-                                border-radius: 999px;
-                                background-color: #64748b !important;
-                                border: 2px solid white;
+                                box-sizing: border-box !important;
                             }
 
                             .road-empty-cell {
@@ -676,6 +655,21 @@
                                     };
 
                                     $betStatus = strtolower($bet->status ?? 'pending');
+
+                                    $payoutAmount = (float) ($bet->payout_amount ?? 0);
+                                    $payoutLabel = 'Possible Payout';
+
+                                    if ($betStatus === 'refunded') {
+                                        $payoutLabel = 'Refunded';
+                                        $payoutAmount = (float) $bet->amount;
+                                    } elseif (in_array($betStatus, ['won', 'paid'])) {
+                                        $payoutLabel = 'Payout';
+                                    } elseif ($betStatus === 'lost') {
+                                        $payoutLabel = 'Lost';
+                                        $payoutAmount = 0;
+                                    } else {
+                                        $payoutAmount = round((float) $bet->amount * (float) $bet->odds_at_bet, 2);
+                                    }
                                 @endphp
 
                                 <div class="game-history-item">
@@ -690,8 +684,9 @@
                                             </p>
 
                                             <p class="game-history-sub">
-                                                Room: {{ $bet->round?->round_code ?? $bet->game_round_id }}
+                                                Room: {{ $bet->round?->round_code ?? $bet->round?->round_number ?? $bet->game_round_id }}
                                                 • Odds {{ number_format($bet->odds_at_bet, 2) }}x
+                                                • {{ $payoutLabel }} ₱{{ number_format($payoutAmount, 2) }}
                                             </p>
                                         </div>
                                     </div>
@@ -948,6 +943,8 @@
                 box.innerHTML = bets.map((bet) => {
                     const sideKey = bet.side_key || '';
                     const statusKey = bet.status_key || 'pending';
+                    const payoutLabel = bet.payout_label || 'Payout';
+                    const payoutAmount = Number(bet.payout_amount || 0);
 
                     return `
                         <div class="game-history-item">
@@ -962,7 +959,9 @@
                                     </p>
 
                                     <p class="game-history-sub">
-                                        Room: ${bet.round} • Odds ${Number(bet.odds || 0).toFixed(2)}x
+                                        Room: ${bet.round}
+                                        • Odds ${Number(bet.odds || 0).toFixed(2)}x
+                                        • ${payoutLabel} ${money(payoutAmount)}
                                     </p>
                                 </div>
                             </div>
@@ -985,7 +984,7 @@
             };
 
             const normalizeRoadSide = (side) => {
-                side = String(side || '').toLowerCase();
+                side = String(side || '').trim().toLowerCase();
 
                 if (side === 'm' || side === 'meron') {
                     return 'meron';
@@ -1009,12 +1008,19 @@
             const roadColor = (side) => {
                 side = normalizeRoadSide(side);
 
-                return {
-                    meron: '#ef4444',
-                    wala: '#2563eb',
-                    draw: '#7c3aed',
-                    cancelled: '#64748b',
-                }[side] || '#64748b';
+                if (side === 'meron') {
+                    return '#ef4444';
+                }
+
+                if (side === 'wala') {
+                    return '#2563eb';
+                }
+
+                if (side === 'draw') {
+                    return '#7c3aed';
+                }
+
+                return '#64748b';
             };
 
             const renderBeadRoad = (road) => {
@@ -1047,12 +1053,24 @@
                             <div
                                 class="road-token"
                                 style="
-                                    background-color:${color} !important;
+                                    width:30px !important;
+                                    height:30px !important;
+                                    min-width:30px !important;
+                                    min-height:30px !important;
+                                    border-radius:999px !important;
+                                    display:flex !important;
+                                    align-items:center !important;
+                                    justify-content:center !important;
+                                    font-size:11px !important;
+                                    font-weight:950 !important;
                                     background:${color} !important;
+                                    background-color:${color} !important;
                                     color:#ffffff !important;
+                                    border:2px solid rgba(255,255,255,.85) !important;
                                     opacity:1 !important;
                                     filter:none !important;
-                                    border:0 !important;
+                                    background-image:none !important;
+                                    box-shadow:0 8px 16px rgba(15,23,42,.18) !important;
                                 "
                             >
                                 ${label}
@@ -1180,14 +1198,39 @@
                             continue;
                         }
 
-                        const color = roadColor(cell.side);
+                        const side = normalizeRoadSide(cell.side);
+                        const color = roadColor(side);
 
                         const drawMarker = cell.markers && cell.markers.includes('draw')
-                            ? `<span class="road-draw-dot" title="Draw"></span>`
+                            ? `<span
+                                title="Draw"
+                                style="
+                                    position:absolute;
+                                    right:-3px;
+                                    top:-3px;
+                                    width:10px;
+                                    height:10px;
+                                    border-radius:999px;
+                                    background:#7c3aed !important;
+                                    border:2px solid #ffffff;
+                                "
+                            ></span>`
                             : '';
 
                         const cancelMarker = cell.markers && cell.markers.includes('cancelled')
-                            ? `<span class="road-cancel-dot" title="Cancelled"></span>`
+                            ? `<span
+                                title="Cancelled"
+                                style="
+                                    position:absolute;
+                                    left:-3px;
+                                    top:-3px;
+                                    width:10px;
+                                    height:10px;
+                                    border-radius:999px;
+                                    background:#64748b !important;
+                                    border:2px solid #ffffff;
+                                "
+                            ></span>`
                             : '';
 
                         html += `
@@ -1195,11 +1238,23 @@
                                 <div
                                     class="big-road-token"
                                     style="
-                                        border:4px solid ${color} !important;
-                                        color:${color} !important;
+                                        width:28px !important;
+                                        height:28px !important;
+                                        min-width:28px !important;
+                                        min-height:28px !important;
+                                        border-radius:999px !important;
+                                        display:flex !important;
+                                        align-items:center !important;
+                                        justify-content:center !important;
+                                        font-size:10px !important;
+                                        font-weight:950 !important;
                                         background:#ffffff !important;
+                                        color:${color} !important;
+                                        border:4px solid ${color} !important;
+                                        position:relative !important;
                                         opacity:1 !important;
                                         filter:none !important;
+                                        box-sizing:border-box !important;
                                     "
                                 >
                                     ${cell.label}
@@ -1256,6 +1311,44 @@
                 renderBigRoad(road);
             };
 
+            const showBetMessage = (message, type = 'success') => {
+                let box = document.getElementById('ajaxBetMessage');
+
+                if (!box) {
+                    box = document.createElement('div');
+                    box.id = 'ajaxBetMessage';
+                    box.style.position = 'fixed';
+                    box.style.right = '20px';
+                    box.style.bottom = '20px';
+                    box.style.zIndex = '99999';
+                    box.style.maxWidth = '360px';
+                    box.style.borderRadius = '16px';
+                    box.style.padding = '14px 16px';
+                    box.style.fontSize = '13px';
+                    box.style.fontWeight = '900';
+                    box.style.boxShadow = '0 18px 45px rgba(15,23,42,.22)';
+                    document.body.appendChild(box);
+                }
+
+                if (type === 'success') {
+                    box.style.background = '#dcfce7';
+                    box.style.color = '#166534';
+                    box.style.border = '1px solid #bbf7d0';
+                } else {
+                    box.style.background = '#fee2e2';
+                    box.style.color = '#991b1b';
+                    box.style.border = '1px solid #fecaca';
+                }
+
+                box.textContent = message;
+                box.style.display = 'block';
+
+                clearTimeout(window.ajaxBetMessageTimer);
+                window.ajaxBetMessageTimer = setTimeout(() => {
+                    box.style.display = 'none';
+                }, 2500);
+            };
+
             const loadLiveGame = async () => {
                 try {
                     const response = await fetch(liveUrl, {
@@ -1308,6 +1401,60 @@
                     console.error('Live game update failed:', error);
                 }
             };
+
+            document.querySelectorAll('.game-bet-form').forEach((form) => {
+                form.addEventListener('submit', async function (event) {
+                    event.preventDefault();
+
+                    const submitButton = form.querySelector('button[type="submit"]');
+                    const amountInput = form.querySelector('input[name="amount"]');
+
+                    if (!amountInput || Number(amountInput.value || 0) <= 0) {
+                        showBetMessage('Please enter a valid amount.', 'error');
+                        return;
+                    }
+
+                    if (submitButton) {
+                        submitButton.disabled = true;
+                        submitButton.dataset.originalText = submitButton.textContent;
+                        submitButton.textContent = 'Placing...';
+                    }
+
+                    try {
+                        const response = await fetch(form.action, {
+                            method: 'POST',
+                            headers: {
+                                'Accept': 'application/json',
+                                'X-Requested-With': 'XMLHttpRequest',
+                            },
+                            body: new FormData(form),
+                        });
+
+                        const data = await response.json().catch(() => ({
+                            ok: false,
+                            message: 'Bet failed. Please try again.',
+                        }));
+
+                        if (!response.ok || !data.ok) {
+                            showBetMessage(data.message || 'Bet failed. Please try again.', 'error');
+                            return;
+                        }
+
+                        amountInput.value = '';
+                        showBetMessage(data.message || 'Bet placed successfully.', 'success');
+
+                        await loadLiveGame();
+                    } catch (error) {
+                        console.error('Bet submit failed:', error);
+                        showBetMessage('Connection error. Please try again.', 'error');
+                    } finally {
+                        if (submitButton) {
+                            submitButton.disabled = false;
+                            submitButton.textContent = submitButton.dataset.originalText || 'Bet';
+                        }
+                    }
+                });
+            });
 
             loadLiveGame();
             setInterval(loadLiveGame, 1000);

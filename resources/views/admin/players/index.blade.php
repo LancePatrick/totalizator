@@ -179,6 +179,11 @@
             background:#fffbeb;
         }
 
+        .modal-section-password {
+            border-color:#fed7aa;
+            background:#fff7ed;
+        }
+
         .section-title {
             margin:0;
             color:#0f172a;
@@ -339,7 +344,7 @@
                                     : ucfirst(str_replace('_', ' ', $player->kyc_status ?? 'not submitted'));
 
                                 $appealMessage = $player->appeal_message ?? $player->appeal_reason ?? null;
-                                $appealProof = $player->appeal_proof ?? null;
+                                $appealProof = $player->appeal_proof ?? $player->appeal_image ?? null;
                             @endphp
 
                             <tr>
@@ -437,6 +442,49 @@
                                                             </span>
                                                         </p>
                                                     </div>
+                                                </div>
+
+                                                <div class="modal-section modal-section-password">
+                                                    <p class="section-title" style="color:#92400e;">
+                                                        Change Player Password
+                                                    </p>
+
+                                                    <p class="section-text">
+                                                        Set a new password for this player account.
+                                                    </p>
+
+                                                    <form method="POST" action="{{ route('admin.players.password.update', $player) }}" style="margin-top:12px;">
+                                                        @csrf
+
+                                                        <div class="modal-grid">
+                                                            <input
+                                                                type="password"
+                                                                name="password"
+                                                                required
+                                                                minlength="8"
+                                                                class="input"
+                                                                placeholder="New password"
+                                                            >
+
+                                                            <input
+                                                                type="password"
+                                                                name="password_confirmation"
+                                                                required
+                                                                minlength="8"
+                                                                class="input"
+                                                                placeholder="Confirm password"
+                                                            >
+                                                        </div>
+
+                                                        <button
+                                                            type="submit"
+                                                            class="btn btn-amber"
+                                                            style="width:100%; margin-top:10px;"
+                                                            onclick="return confirm('Change this player password?')"
+                                                        >
+                                                            Change Password
+                                                        </button>
+                                                    </form>
                                                 </div>
 
                                                 <div class="modal-section {{ $player->is_active ? '' : 'modal-section-danger' }}">

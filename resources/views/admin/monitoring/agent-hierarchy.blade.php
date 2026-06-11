@@ -404,22 +404,31 @@
     </style>
 
     @php
-        $totalAgents = $agents->total();
+        $agents = $agents ?? collect();
 
-        $visiblePlayers = $agents->getCollection()->sum(function ($agent) {
-            return (int) ($agent->total_players_count ?? 0);
+        $visibleAgents = method_exists($agents, 'items')
+            ? collect($agents->items())
+            : collect($agents);
+
+        $totalAgents = method_exists($agents, 'total')
+            ? $agents->total()
+            : $visibleAgents->count();
+
+        $visiblePlayers = $visibleAgents->sum(function ($agent) {
+            return (int) data_get($agent, 'players_count', data_get($agent, 'total_players_count', 0));
         });
 
-        $visibleWallet = $agents->getCollection()->sum(function ($agent) {
-            return (float) ($agent->wallet_balance ?? 0);
+        $visibleWallet = $visibleAgents->sum(function ($agent) {
+            return (float) data_get($agent, 'wallet_balance', 0);
         });
 
-        $visibleTotalBets = $agents->getCollection()->sum(function ($agent) {
-            return (float) ($agent->total_player_bets ?? 0);
+        $visibleTotalBets = $visibleAgents->sum(function ($agent) {
+            return (float) data_get($agent, 'players_total_bets', data_get($agent, 'total_player_bets', 0));
         });
 
-        $visibleAgentCommission = $agents->getCollection()->sum(function ($agent) {
-            return (float) ($agent->agent_commission_amount ?? 0);
+        $visibleAgentCommission = $visibleAgents->sum(function ($agent) {
+            $bets = (float) data_get($agent, 'players_total_bets', data_get($agent, 'total_player_bets', 0));
+            return round($bets * 0.02, 2);
         });
     @endphp
 
@@ -479,12 +488,61 @@
         </section>
 
         <section class="agent-list">
-            @forelse($agents as $agent)
+            @forelse($visibleAgents as $agent)
                 @php
-                    $agentInitials = strtoupper(substr($agent->name ?? 'A', 0, 2));
-                    $players = $agent->players ?? collect();
-                    $agentTotalBets = (float) ($agent->total_player_bets ?? 0);
-                    $agentCommission = (float) ($agent->agent_commission_amount ?? 0);
+                    $agentName = data_get($agent, 'name', 'N/A');
+                    $agentId = data_get($agent, 'id', 'N/A');
+                    $agentEmail = data_get($agent, 'email', 'No email');
+                    $agentCode = data_get($agent, 'agent_code', 'N/A');
+
+                    $agentInitials = strtoupper(substr($agentName ?: 'A', 0, 2));
+
+                    $agentWallet = (float) data_get($agent, 'wallet_balance', 0);
+                    $agentTotalBets = (float) data_get($agent, 'players_total_bets', data_get($agent, 'total_player_bets', 0));
+                    $agentCommission = round($agentTotalBets * 0.02, 2);
+
+                    $agentPlayersCount = (int) data_get($agent, 'players_count', data_get($agent, 'total_players_count', 0));
+                    $agentIsActive = (bool) data_get($agent, 'is_active', true);
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Controller-based fallback
+                    |--------------------------------------------------------------------------
+                    | Your current controller only sends players_count, players_wallet_sum,
+                    | and players_total_bets. It does not send the actual players list.
+                    | So this index loads the player list here, then computes each player total bet.
+                    |--------------------------------------------------------------------------
+                    */
+
+                    $players = collect(data_get($agent, 'players', []));
+
+                    if ($players->isEmpty() && is_numeric($agentId)) {
+                        $players = \App\Models\User::query()
+                            ->where('role', 'player')
+                            ->where('agent_id', $agentId)
+                            ->orderBy('name')
+                            ->get()
+                            ->map(function ($player) {
+                                $playerBetsQuery = \App\Models\GameBet::query()
+                                    ->where('user_id', $player->id)
+                                    ->whereNotIn('status', ['refunded', 'cancelled']);
+
+                                if (\Illuminate\Support\Facades\Schema::hasTable('game_rounds')) {
+                                    $playerBetsQuery->whereNotIn('game_round_id', function ($query) {
+                                        $query->select('id')
+                                            ->from('game_rounds')
+                                            ->where('winning_side', 'cancelled');
+                                    });
+                                }
+
+                                $playerTotalBets = (float) $playerBetsQuery->sum('amount');
+
+                                $player->total_bets = $playerTotalBets;
+                                $player->agent_commission_amount = round($playerTotalBets * 0.02, 2);
+
+                                return $player;
+                            });
+                    }
                 @endphp
 
                 <details class="agent-item">
@@ -496,22 +554,22 @@
 
                             <div>
                                 <h2 class="agent-name">
-                                    {{ $agent->name }}
+                                    {{ $agentName }}
                                 </h2>
 
                                 <div class="agent-meta">
-                                    {{ $agent->email }} • Code: {{ $agent->agent_code ?: 'N/A' }}
+                                    {{ $agentEmail }} • Code: {{ $agentCode ?: 'N/A' }}
                                 </div>
                             </div>
                         </div>
 
                         <div class="badges">
                             <span class="badge badge-blue">
-                                Players: {{ number_format($agent->total_players_count ?? 0) }}
+                                Players: {{ number_format($agentPlayersCount) }}
                             </span>
 
                             <span class="badge">
-                                Wallet: ₱{{ number_format($agent->wallet_balance ?? 0, 2) }}
+                                Wallet: ₱{{ number_format($agentWallet, 2) }}
                             </span>
 
                             <span class="badge badge-blue">
@@ -522,8 +580,8 @@
                                 Commission 2%: ₱{{ number_format($agentCommission, 2) }}
                             </span>
 
-                            <span class="badge {{ $agent->is_active ? 'badge-green' : 'badge-red' }}">
-                                {{ $agent->is_active ? 'Active' : 'Inactive' }}
+                            <span class="badge {{ $agentIsActive ? 'badge-green' : 'badge-red' }}">
+                                {{ $agentIsActive ? 'Active' : 'Inactive' }}
                             </span>
 
                             <span class="badge badge-yellow">
@@ -535,7 +593,7 @@
                     <div class="players-panel">
                         <div class="players-head">
                             <h3 class="players-title">
-                                Players under {{ $agent->name }}
+                                Players under {{ $agentName }}
                             </h3>
 
                             <div class="badges">
@@ -572,27 +630,40 @@
                                     <tbody>
                                         @foreach($players as $player)
                                             @php
-                                                $playerTotalBets = (float) ($player->total_bets ?? 0);
-                                                $playerAgentCommission = round($playerTotalBets * 0.02, 2);
+                                                $playerName = data_get($player, 'name', 'N/A');
+                                                $playerId = data_get($player, 'id', 'N/A');
+                                                $playerEmail = data_get($player, 'email', 'N/A');
+                                                $playerPhone = data_get($player, 'phone', 'N/A');
+                                                $playerWallet = (float) data_get($player, 'wallet_balance', 0);
+
+                                                $playerTotalBets = (float) data_get($player, 'total_bets', 0);
+                                                $playerAgentCommission = (float) data_get(
+                                                    $player,
+                                                    'agent_commission_amount',
+                                                    round($playerTotalBets * 0.02, 2)
+                                                );
+
+                                                $playerIsActive = (bool) data_get($player, 'is_active', true);
+                                                $playerCreatedAt = data_get($player, 'created_at');
                                             @endphp
 
                                             <tr>
                                                 <td>
-                                                    {{ $player->name }}
-                                                    <div class="muted">Player ID: #{{ $player->id }}</div>
+                                                    {{ $playerName }}
+                                                    <div class="muted">Player ID: #{{ $playerId }}</div>
                                                 </td>
 
                                                 <td>
-                                                    {{ $player->email }}
+                                                    {{ $playerEmail }}
                                                 </td>
 
                                                 <td>
-                                                    {{ $player->phone ?: 'N/A' }}
+                                                    {{ $playerPhone ?: 'N/A' }}
                                                 </td>
 
                                                 <td>
                                                     <span class="amount">
-                                                        ₱{{ number_format($player->wallet_balance ?? 0, 2) }}
+                                                        ₱{{ number_format($playerWallet, 2) }}
                                                     </span>
                                                 </td>
 
@@ -609,14 +680,20 @@
                                                 </td>
 
                                                 <td>
-                                                    <span class="badge {{ $player->is_active ? 'badge-green' : 'badge-red' }}">
-                                                        {{ $player->is_active ? 'Active' : 'Inactive' }}
+                                                    <span class="badge {{ $playerIsActive ? 'badge-green' : 'badge-red' }}">
+                                                        {{ $playerIsActive ? 'Active' : 'Inactive' }}
                                                     </span>
                                                 </td>
 
                                                 <td>
-                                                    {{ $player->created_at?->format('M d, Y') }}
-                                                    <div class="muted">{{ $player->created_at?->format('h:i A') }}</div>
+                                                    @if($playerCreatedAt)
+                                                        {{ \Illuminate\Support\Carbon::parse($playerCreatedAt)->format('M d, Y') }}
+                                                        <div class="muted">
+                                                            {{ \Illuminate\Support\Carbon::parse($playerCreatedAt)->format('h:i A') }}
+                                                        </div>
+                                                    @else
+                                                        N/A
+                                                    @endif
                                                 </td>
                                             </tr>
                                         @endforeach
@@ -639,8 +716,10 @@
             @endforelse
         </section>
 
-        <div class="pagination">
-            {{ $agents->links() }}
-        </div>
+        @if(method_exists($agents, 'links'))
+            <div class="pagination">
+                {{ $agents->links() }}
+            </div>
+        @endif
     </div>
 </x-layouts.app>
